@@ -1,6 +1,7 @@
 """
 Gradio web interface module for PharmaGuard.
-Provides a modern, high-contrast pharmacy security monitoring console.
+Provides a modern, high-contrast pharmacy security monitoring console
+with real-time browser webcam streaming, low-latency queues, and live telemetry.
 """
 
 from typing import Tuple, List, Optional
@@ -121,11 +122,11 @@ def create_pharmaguard_ui(
     def process_webcam_stream(frame_in: Optional[np.ndarray]):
         """Stream handler callback invoked for each webcam frame."""
         if frame_in is None:
-            # Return empty/standby states
+            # Return empty/standby states gracefully
             empty_out = pipeline._create_empty_output(0.0, "STANDBY")
             return (
                 empty_out.annotated_frame_rgb,
-                "STANDBY",
+                "STANDBY (Webcam Paused/Inactive)",
                 "0",
                 "None",
                 "0.0",
@@ -141,13 +142,23 @@ def create_pharmaguard_ui(
         alerts_html = format_alerts_html(output.recent_alerts)
         events_html = format_events_html(output.recent_events)
 
+        # Format fine-grained latency breakdown
+        stage_timings = output.metadata.get("stage_timings", {})
+        det_ms = stage_timings.get("detect_ms", 0.0)
+        trk_ms = stage_timings.get("track_ms", 0.0)
+        hud_ms = stage_timings.get("annotate_ms", 0.0)
+        latency_str = f"{output.latency_ms:.0f} ms (Det: {det_ms:.0f}ms, Trk: {trk_ms:.0f}ms, HUD: {hud_ms:.0f}ms)"
+
+        device_str = output.metadata.get("device", "cpu").upper()
+        status_text = f"ONLINE [{output.connection_status}] | {device_str}"
+
         return (
             output.annotated_frame_rgb,
-            f"ONLINE [{output.connection_status}]",
+            status_text,
             str(output.active_tracks_count),
             active_ids_str,
             f"{output.fps:.1f}",
-            f"{output.latency_ms:.0f} ms",
+            latency_str,
             alerts_html,
             events_html
         )
@@ -169,7 +180,10 @@ def create_pharmaguard_ui(
             z.dwell_alert_threshold_sec = dwell
         return f"Updated: Conf={conf:.2f}, Dwell={dwell:.1f}s"
 
-    with gr.Blocks(title="PharmaGuard — Pharmacy AI Surveillance", css=SECURITY_THEME_CSS) as demo:
+    with gr.Blocks(title="PharmaGuard — Pharmacy AI Surveillance") as demo:
+        # Custom CSS injection (Gradio 4/5/6 universal compatibility)
+        gr.HTML(f"<style>{SECURITY_THEME_CSS}</style>")
+
         # Header banner
         with gr.Row(elem_classes=["header-banner"]):
             with gr.Column(scale=8):
@@ -178,12 +192,14 @@ def create_pharmaguard_ui(
                 <div class='header-subtitle'>Real-time suspicious interaction sequence detection & shelf dwell monitoring</div>
                 """)
             with gr.Column(scale=4, min_width=200):
-                gr.HTML("""
+                device_badge = pipeline.detector.get_model_info().get("device", "cpu").upper()
+                model_name = pipeline.detector.get_model_info().get("model_name", "yolov8n.pt")
+                gr.HTML(f"""
                 <div style='text-align: right; padding-top: 4px;'>
                     <span style='background: #065f46; color: #34d399; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 9999px;'>
-                        ● SEC-OPS LIVE
+                        ● SEC-OPS LIVE [{device_badge}]
                     </span>
-                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Inference: YOLOv8 + ByteTrack</div>
+                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {model_name} + ByteTrack</div>
                 </div>
                 """)
 
@@ -195,11 +211,11 @@ def create_pharmaguard_ui(
                     webcam_input = gr.Image(
                         sources=["webcam"],
                         streaming=True,
-                        label="1. Browser Camera Input (Live Feed)",
+                        label="1. Browser Camera Input (Live Feed - Click Record/Webcam to Start)",
                         type="numpy"
                     )
                     annotated_output = gr.Image(
-                        label="2. PharmaGuard Real-Time AI Output (Annotated)",
+                        label="2. PharmaGuard Real-Time AI Output (Annotated Feed)",
                         type="numpy",
                         interactive=False
                     )
@@ -217,7 +233,7 @@ def create_pharmaguard_ui(
                     with gr.Column(scale=1):
                         fps_val = gr.Textbox(value="0.0", label="Processing FPS", interactive=False)
                     with gr.Column(scale=1):
-                        latency_val = gr.Textbox(value="0 ms", label="Frame Latency", interactive=False)
+                        latency_val = gr.Textbox(value="0 ms", label="Frame Latency & Breakdown", interactive=False)
 
                 with gr.Row():
                     active_ids_val = gr.Textbox(value="None", label="Active Tracking IDs", interactive=False)
@@ -256,7 +272,7 @@ def create_pharmaguard_ui(
                         outputs=[tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
                     )
 
-        # Wire webcam stream to pipeline processor
+        # Wire webcam stream to pipeline processor with low-latency streaming parameters
         webcam_input.stream(
             fn=process_webcam_stream,
             inputs=[webcam_input],
@@ -269,7 +285,10 @@ def create_pharmaguard_ui(
                 latency_val,
                 alerts_box,
                 events_box
-            ]
+            ],
+            stream_every=0.04,  # ~25 FPS stream rate (avoids default 0.5s = 2 FPS bottleneck)
+            show_progress="hidden",
+            concurrency_limit=1
         )
 
     return demo

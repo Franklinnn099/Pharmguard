@@ -56,6 +56,8 @@ The client runs on a laptop with a webcam. The compute backend runs in Google Co
 ### Options Evaluated
 1. **Gradio with `gr.Image(sources=['webcam'], streaming=True)` + Public Live Tunnel**
    - *Mechanism*: Gradio runs a FastAPI/WebSocket server in Colab. `demo.launch(share=True)` provides an encrypted public HTTPS tunnel (`https://xxxx.gradio.live`). Modern browsers strictly require HTTPS to grant webcam access.
+   - *Streaming Latency Optimization*: By default, Gradio throttles streaming to `stream_every=0.5` (2 FPS). We explicitly tuned `stream_every=0.04` (~25 FPS), disabled per-frame progress micro-spinners (`show_progress="hidden"`), and enabled WebSocket connection queuing (`demo.queue(default_concurrency_limit=2)`).
+   - *Tunnel Security*: Added optional basic authentication (`admin:pharmguard2026`) via `demo.launch(auth=...)` to ensure unauthorized web crawlers cannot access the live pharmacy surveillance stream.
    - *Pros*: Zero client installation required on the laptop—any browser can open the link, click "Allow Camera", and stream frames to Colab. Includes integrated UI components for telemetry and controls.
    - *Decision*: **Selected for the primary architecture.**
 

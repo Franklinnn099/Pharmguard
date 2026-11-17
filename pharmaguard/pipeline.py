@@ -1,7 +1,7 @@
 """
 End-to-end computer vision pipeline for PharmaGuard.
 Orchestrates frame ingestion, inference, tracking, behavioral analysis,
-alert generation, and visual annotation.
+alert generation, fine-grained telemetry measurement, and visual annotation.
 """
 
 from dataclasses import dataclass, field
@@ -51,23 +51,36 @@ class PharmaGuardPipeline:
         self.event_manager = EventManager()
         self.annotator = SecurityAnnotator(self.config.display)
 
-        # Performance Metrics
+        # Performance & Timing Metrics
         self._frame_times: List[float] = []
         self._last_frame_ts: float = time.time()
         self.fps: float = 0.0
         self.latency_ms: float = 0.0
         self.frame_counter: int = 0
 
+        # Fine-grained stage latencies (ms)
+        self.last_stage_timings: Dict[str, float] = {
+            "detect_ms": 0.0,
+            "track_ms": 0.0,
+            "behavior_ms": 0.0,
+            "annotate_ms": 0.0,
+            "total_backend_ms": 0.0
+        }
+
+        model_info = self.detector.get_model_info()
+        self.device = model_info.get("device", "cpu")
+        self.model_name = model_info.get("model_name", "unknown")
+
         self.event_manager.log(
             category="SYSTEM",
-            message=f"Pipeline initialized with model '{self.config.detector.model_name}' on device '{self.detector.get_model_info().get('device')}'"
+            message=f"Pipeline initialized with model '{self.model_name}' on device '{self.device}'"
         )
 
     def process_frame(self, frame_rgb: np.ndarray) -> PipelineOutput:
         """Process a single frame captured from the webcam (RGB format).
 
         Args:
-            frame_rgb: RGB image numpy array (H, W, 3).
+            frame_rgb: RGB image numpy array (H, W, 3) or (H, W, 4).
 
         Returns:
             PipelineOutput with annotated frame and monitoring metrics.
@@ -78,19 +91,34 @@ class PharmaGuardPipeline:
         if frame_rgb is None or frame_rgb.size == 0:
             return self._create_empty_output(start_time, "NO_SIGNAL")
 
+        # Handle RGBA frames from web browser canvas/WebRTC if 4-channel
+        if len(frame_rgb.shape) == 3 and frame_rgb.shape[2] == 4:
+            frame_rgb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGBA2RGB)
+        elif len(frame_rgb.shape) == 2:
+            frame_rgb = cv2.cvtColor(frame_rgb, cv2.COLOR_GRAY2RGB)
+
         h, w = frame_rgb.shape[:2]
 
         # Convert to BGR for OpenCV processing & standard model input
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
-        # 1. Person Detection (YOLO)
+        # 1. Person Detection (YOLO / RT-DETR)
+        t_det_start = time.perf_counter()
         detection_result = self.detector.detect(frame_bgr)
+        t_det_end = time.perf_counter()
+        detect_ms = (t_det_end - t_det_start) * 1000.0
 
         # 2. Multi-Object Tracking (ByteTrack)
+        t_track_start = time.perf_counter()
         tracking_result = self.tracker.update(detection_result)
+        t_track_end = time.perf_counter()
+        track_ms = (t_track_end - t_track_start) * 1000.0
 
         # 3. Behavioral Analysis (Shelf Zone monitoring)
+        t_beh_start = time.perf_counter()
         behavior_events = self.behavior_analyzer.analyze(tracking_result, frame_width=w, frame_height=h)
+        t_beh_end = time.perf_counter()
+        behavior_ms = (t_beh_end - t_beh_start) * 1000.0
 
         # 4. Alert Management
         new_alerts = self.alert_manager.process_behavior_events(behavior_events)
@@ -112,6 +140,7 @@ class PharmaGuardPipeline:
             )
 
         # 5. Visual Annotation
+        t_ann_start = time.perf_counter()
         annotated_bgr = frame_bgr.copy()
         annotated_bgr = self.annotator.draw_shelf_zones(annotated_bgr, self.config.zones, zone_occupancy)
         annotated_bgr = self.annotator.draw_tracked_persons(annotated_bgr, tracking_result)
@@ -141,9 +170,28 @@ class PharmaGuardPipeline:
             alert_count=len(self.alert_manager.alert_history),
             connection_status="LIVE"
         )
+        t_ann_end = time.perf_counter()
+        annotate_ms = (t_ann_end - t_ann_start) * 1000.0
 
         # Convert back to RGB for browser/Gradio presentation
         annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+
+        self.last_stage_timings = {
+            "detect_ms": round(detect_ms, 2),
+            "track_ms": round(track_ms, 2),
+            "behavior_ms": round(behavior_ms, 2),
+            "annotate_ms": round(annotate_ms, 2),
+            "total_backend_ms": round(self.latency_ms, 2)
+        }
+
+        metadata = {
+            "resolution": f"{w}x{h}",
+            "device": self.device,
+            "model_name": self.model_name,
+            "stage_timings": self.last_stage_timings,
+            "detections_count": detection_result.count,
+            "frame_counter": self.frame_counter
+        }
 
         return PipelineOutput(
             annotated_frame_rgb=annotated_rgb,
@@ -153,7 +201,8 @@ class PharmaGuardPipeline:
             active_ids=tracking_result.active_ids,
             recent_alerts=self.alert_manager.get_recent_alerts(limit=10),
             recent_events=self.event_manager.get_recent(limit=15),
-            connection_status="ONLINE"
+            connection_status="ONLINE",
+            metadata=metadata
         )
 
     def _create_empty_output(self, start_time: float, status: str) -> PipelineOutput:
@@ -169,7 +218,8 @@ class PharmaGuardPipeline:
             active_ids=[],
             recent_alerts=self.alert_manager.get_recent_alerts(limit=10),
             recent_events=self.event_manager.get_recent(limit=15),
-            connection_status=status
+            connection_status=status,
+            metadata={"device": getattr(self, "device", "unknown"), "status": status}
         )
 
     def reset_state(self) -> None:
