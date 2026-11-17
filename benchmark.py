@@ -51,8 +51,12 @@ def run_benchmark(num_frames: int = 50, width: int = 640, height: int = 480):
         cy = int(80 + (i * 5) % (height - 200))
         cv2.rectangle(frame, (cx, cy), (cx + 80, cy + 170), (220, 220, 220), -1)
 
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         t0 = time.perf_counter()
         output = pipeline.process_frame(frame)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         t1 = time.perf_counter()
 
         latencies_total.append((t1 - t0) * 1000.0)

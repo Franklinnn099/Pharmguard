@@ -4,7 +4,7 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests: Passing](https://img.shields.io/badge/tests-19%2F19%20passing-brightgreen.svg)]()
+[![Tests: Passing](https://img.shields.io/badge/tests-20%2F20%20passing-brightgreen.svg)]()
 [![Hardware: CPU%2FCUDA](https://img.shields.io/badge/Compute-CUDA%20%7C%20CPU-orange.svg)]()
 
 ---

@@ -185,3 +185,41 @@ def test_gradio_ui_webcam_stream_integration():
     result_none = stream_fn(None)
     assert len(result_none) == 8
     assert "STANDBY" in result_none[1]
+
+
+def test_gradio_live_server_execution():
+    """TEST: Launch a genuine running Gradio web server in background, verify HTTP 200 response, and clean shutdown."""
+    import urllib.request
+    import socket
+
+    config = PharmaGuardConfig()
+    pipeline = PharmaGuardPipeline(config)
+    demo = create_pharmaguard_ui(pipeline, config)
+
+    # Find a free port
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(('127.0.0.1', 0))
+    free_port = sock.getsockname()[1]
+    sock.close()
+
+    try:
+        # Launch real server non-blocking
+        demo.launch(
+            server_name="127.0.0.1",
+            server_port=free_port,
+            prevent_thread_lock=True,
+            show_error=False
+        )
+
+        # Make actual HTTP request to verify live running server
+        url = f"http://127.0.0.1:{free_port}/"
+        req = urllib.request.Request(url, headers={"User-Agent": "PharmaGuard-TestClient"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            assert response.status == 200
+            content = response.read().decode("utf-8", errors="ignore")
+            # Verify the HTML contains Gradio app container
+            assert "gradio" in content.lower() or "<!doctype html>" in content.lower()
+
+    finally:
+        # Cleanly shutdown the live server
+        demo.close()

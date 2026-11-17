@@ -45,6 +45,15 @@ htmlcov/
 Thumbs.db
 ehthumbs.db
 
+# Secrets & Environment Variables
+.env
+.env.*
+*.env
+*secret*
+*.pem
+*.key
+*.token
+
 # Jupyter / Colab
 .ipynb_checkpoints/
 

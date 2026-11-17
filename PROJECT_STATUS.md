@@ -3,7 +3,7 @@
 **Current Date**: November 17, 2026  
 **Milestone Target**: December 1, 2026 (Live Demonstration)  
 **Version**: 0.1.1  
-**Test Suite Status**: 19/19 Passing Automated Tests (14 core unit + 5 live streaming integration tests)
+**Test Suite Status**: 20/20 Passing Automated Tests (14 core unit + 6 live streaming & server integration tests)
 
 ---
 
@@ -35,7 +35,7 @@
 2. **WebSocket Queueing**: Added `demo.queue(default_concurrency_limit=2)` to `app.py` to prevent HTTP polling stalls during video streaming.
 3. **RGBA 4-Channel Stream Compatibility**: Browser canvas and WebRTC streams occasionally deliver 4-channel RGBA numpy arrays. Added an automatic format converter in `pipeline.py` to normalize RGBA/Grayscale to 3-channel RGB.
 4. **Stream Pause / Disconnection Handling**: When webcam is stopped or paused in the browser, Gradio sends `None`. Fixed `process_webcam_stream` in `ui.py` to return a clean `STANDBY` state with zero active tracks, preventing crash or stale state.
-5. **Dashboard Security / Authentication**: Added optional basic authentication (`--auth`, default `admin:pharmguard2026`) in `app.py` to secure the public HTTPS Gradio link.
+5. **Dashboard Security / Authentication**: Added secure authentication resolution in `app.py` leveraging Colab Secrets (`PHARMAGUARD_AUTH_USER`/`PHARMAGUARD_AUTH_PASS`), environment variables, or cryptographically generated ephemeral session tokens to secure the public HTTPS Gradio link without hardcoded passwords.
 6. **Colab Directory & Dependency Robustness**: Updated `colab/PharmaGuard_Colab.ipynb` and `colab/setup_colab.sh` to handle workspace paths dynamically and ensure pre-cached weights and clean imports.
 
 ---

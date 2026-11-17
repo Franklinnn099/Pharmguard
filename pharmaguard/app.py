@@ -1,16 +1,53 @@
 """
 Main application launcher for PharmaGuard.
-Supports running in Google Colab (with public Gradio share link & authentication) or locally on workstation.
+Supports running in Google Colab (with public Gradio share link & secure auth) or locally on workstation.
 """
 
 import argparse
 import os
+import secrets
 import sys
 import torch
 
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.pipeline import PharmaGuardPipeline
 from pharmaguard.ui import create_pharmaguard_ui
+
+
+def resolve_auth_credentials(args):
+    """Resolve authentication credentials securely from Colab Secrets, Env Vars, or Ephemeral Generation.
+
+    Never uses hardcoded default passwords.
+    """
+    if args.no_auth:
+        return None
+
+    username = args.auth_user or os.environ.get("PHARMAGUARD_AUTH_USER")
+    password = args.auth_pass or os.environ.get("PHARMAGUARD_AUTH_PASS")
+
+    # Attempt to load from Google Colab Secrets if running inside Colab
+    if not (username and password):
+        try:
+            from google.colab import userdata
+            username = username or userdata.get("PHARMAGUARD_AUTH_USER")
+            password = password or userdata.get("PHARMAGUARD_AUTH_PASS")
+        except Exception:
+            pass
+
+    # If auth requested or in public cloud share mode, ensure credentials exist
+    if args.auth or args.colab or args.share:
+        if not username:
+            username = "security_operator"
+        if not password:
+            # Generate a cryptographically secure ephemeral session key
+            password = secrets.token_urlsafe(12)
+            print(f"[SECURITY] Generated one-time ephemeral session credentials:")
+            print(f"           Username: {username}")
+            print(f"           Password: {password}")
+            print(f"           (To set your own, export PHARMAGUARD_AUTH_USER and PHARMAGUARD_AUTH_PASS)")
+        return (username, password)
+
+    return None
 
 
 def parse_args():
@@ -22,9 +59,10 @@ def parse_args():
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default 0.0.0.0)")
     parser.add_argument("--model", type=str, default=None, help="YOLO model name override (e.g. yolov8n.pt)")
     parser.add_argument("--device", type=str, default=None, help="Device override (cuda, cpu, auto)")
-    parser.add_argument("--auth", action="store_true", help="Enable basic authentication (admin/pharmguard2026)")
-    parser.add_argument("--auth-user", type=str, default="admin", help="Authentication username")
-    parser.add_argument("--auth-pass", type=str, default="pharmguard2026", help="Authentication password")
+    parser.add_argument("--auth", action="store_true", help="Require authentication for access")
+    parser.add_argument("--no-auth", action="store_true", help="Disable authentication even in public share mode")
+    parser.add_argument("--auth-user", type=str, default=None, help="Authentication username override")
+    parser.add_argument("--auth-pass", type=str, default=None, help="Authentication password override")
     return parser.parse_args()
 
 
@@ -61,11 +99,10 @@ def main():
     # Enable low-latency WebSocket queueing
     demo.queue(default_concurrency_limit=2)
 
-    # 4. Determine Launch Options
+    # 4. Resolve Authentication & Launch Options
     share_mode = args.share or args.colab
     server_name = args.host if (args.colab or args.share) else "127.0.0.1"
-
-    auth_config = (args.auth_user, args.auth_pass) if args.auth else None
+    auth_config = resolve_auth_credentials(args)
 
     print(f"\n=========================================================")
     print(f"🛡️  PharmaGuard Security Monitor Active")
@@ -73,7 +110,9 @@ def main():
     print(f"    Public Share Link: {share_mode}")
     print(f"    Access URL: http://{server_name}:{args.port}")
     if auth_config:
-        print(f"    Authentication: Enabled (User: {args.auth_user})")
+        print(f"    Authentication: Enabled (User: {auth_config[0]})")
+    else:
+        print(f"    Authentication: Disabled")
     print(f"=========================================================\n")
 
     demo.launch(

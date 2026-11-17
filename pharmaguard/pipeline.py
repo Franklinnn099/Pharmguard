@@ -9,6 +9,7 @@ from typing import List, Dict, Optional, Tuple, Any
 import time
 import numpy as np
 import cv2
+import torch
 
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult
@@ -103,8 +104,12 @@ class PharmaGuardPipeline:
         frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
         # 1. Person Detection (YOLO / RT-DETR)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         t_det_start = time.perf_counter()
         detection_result = self.detector.detect(frame_bgr)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         t_det_end = time.perf_counter()
         detect_ms = (t_det_end - t_det_start) * 1000.0
 
