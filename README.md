@@ -41,10 +41,8 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 - **Real-Time Person Detection**: Pretrained YOLO inference filtering for person detections with configurable confidence and IoU thresholds.
 - **Multi-Object Tracking**: ByteTrack with a time-scaled Kalman filter, low-confidence occlusion recovery, 2-frame ID confirmation and a motion gate for low tunnel frame rates (TECHNICAL_DECISIONS.md §6).
 - **Configurable Shelf Zones**: Resolution-independent normalized 2D polygons representing monitored pharmacy shelves (e.g. narcotics or restricted medicine racks).
-- **Behavioral Sequence Recognition**:
-  - `SUSPICIOUS_LOITERING`: Detects when an individual lingers near sensitive stock beyond the alert dwell threshold (default: 8.0s).
-  - `RAPID_RETREAT`: Detects abrupt grab-and-retreat movement patterns (rapid interaction between 0.5s and 2.5s).
-  - `MULTI_PERSON_RESTRICTED`: Flags simultaneous congregation around high-risk shelves.
+- **Hand-Based Interaction Analysis**: YOLOv8-pose wrist keypoints detect hands reaching into a configured shelf zone, then moving to the person's waist/pocket region or a detected bag within seconds.
+- **Suspicion Scoring for Staff Review**: decaying, weighted evidence; browsing alone can never alert; REVIEW (visual) and ALERT (alarm) fire once per incident with human-readable reasons. The system flags interactions for review and does not determine theft or intent.
 - **Alert Management & Throttling**: Cooldown suppression prevents alert storms while recording alerts to structured audit logs (`pharmaguard_alerts.jsonl`).
 - **Professional Security Dashboard**: High-contrast dark surveillance console built with Gradio displaying live FPS, latency, tracked count, active IDs, real-time alert feed, and zone configuration sliders.
 
@@ -111,8 +109,7 @@ python tools/e2e_benchmark.py --url http://127.0.0.1:7860   # browser-equivalent
 - [x] Browser-to-server-to-browser streaming verified locally; Colab GPU run pending.
 - [x] Pretrained YOLO person detection.
 - [x] Robust multi-person tracking (ByteTrack + Kalman, occlusion, crossing): verified on synthetic ground truth; staged real-video check pending.
-- [ ] Shelf interaction analysis for webcam-facing-shelf setup (hands, bag/pocket, scoring).
+- [x] Shelf interaction analysis (hands, bag/pocket, scoring): verified on scripted scenarios; staged real-footage rates pending (docs/DEMO_STAGING.md).
 - [x] Actionable alerts and professional security console UI.
-- [ ] Pose estimation / hand-in-shelf keypoint validation.
 - [ ] Commercial Apache 2.0 model validation (`rtdetr-l.pt`).
 - [ ] Multi-camera aisle expansion.

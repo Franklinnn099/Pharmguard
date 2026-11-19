@@ -4,7 +4,7 @@ Renders professional security overlays, shelf ROI boundaries, person bounding bo
 tracking traces, dwell badges, and security status HUD.
 """
 
-from typing import List, Dict, Tuple, Optional
+from typing import Callable, List, Dict, Tuple, Optional
 import numpy as np
 import cv2
 
@@ -22,103 +22,105 @@ class SecurityAnnotator:
         pts = [[int(pt[0] * width), int(pt[1] * height)] for pt in norm_poly]
         return np.array(pts, dtype=np.int32)
 
-    def draw_shelf_zones(self, frame: np.ndarray, zones: List[ShelfZone], any_person_in_zone: Dict[str, bool]) -> np.ndarray:
-        """Render semi-transparent pharmacy shelf zones with status badges."""
+    def draw_shelf_zones(self, frame: np.ndarray, zones: List[ShelfZone],
+                         activity: Dict[str, object]) -> np.ndarray:
+        """Semi-transparent shelf zones. ``activity`` maps zone -> 'CONTACT' | 'PRESENCE' | 'IDLE'
+        (a bool is accepted as legacy: True = CONTACT)."""
         if not self.config.show_shelf_zones:
             return frame
 
         h, w = frame.shape[:2]
         overlay = frame.copy()
+        styles = {  # BGR fill, border
+            "CONTACT": ((20, 20, 180), (50, 50, 255)),
+            "PRESENCE": ((20, 120, 180), (40, 180, 255)),
+            "IDLE": ((180, 130, 20), (255, 200, 50)),
+        }
 
         for zone in zones:
             pts = self._denormalize_polygon(zone.polygon_normalized, w, h)
-            is_active = any_person_in_zone.get(zone.name, False)
+            state = activity.get(zone.name, "IDLE")
+            if isinstance(state, bool):
+                state = "CONTACT" if state else "IDLE"
+            fill_color, border_color = styles.get(state, styles["IDLE"])
 
-            # Red/Amber when someone is interacting, Cyan/Blue when idle/secure
-            fill_color = (20, 20, 180) if is_active else (180, 130, 20)  # BGR
-            border_color = (50, 50, 255) if is_active else (255, 200, 50)
-
-            # Fill zone with transparency
             cv2.fillPoly(overlay, [pts], fill_color)
-
-            # Draw zone outline
             cv2.polylines(frame, [pts], isClosed=True, color=border_color, thickness=2, lineType=cv2.LINE_AA)
 
-            # Draw zone header badge
             top_pt = pts[0]
-            status_text = f"ZONE: {zone.name} [{'OCCUPIED' if is_active else 'SECURED'}]"
+            label = {"CONTACT": "HAND CONTACT", "PRESENCE": "PERSON AT SHELF", "IDLE": "CLEAR"}.get(state, state)
+            status_text = f"ZONE: {zone.name} [{label}]"
             text_size = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
             badge_x = max(10, min(w - text_size[0] - 14, top_pt[0]))
             badge_y = max(40, top_pt[1] - 8)
+            cv2.rectangle(frame, (badge_x - 4, badge_y - text_size[1] - 4),
+                          (badge_x + text_size[0] + 4, badge_y + 4), (30, 30, 30), -1)
+            cv2.putText(frame, status_text, (badge_x, badge_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                        border_color, 1, lineType=cv2.LINE_AA)
 
-            cv2.rectangle(
-                frame,
-                (badge_x - 4, badge_y - text_size[1] - 4),
-                (badge_x + text_size[0] + 4, badge_y + 4),
-                (30, 30, 30),
-                -1
-            )
-            cv2.putText(
-                frame,
-                status_text,
-                (badge_x, badge_y),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.45,
-                border_color,
-                1,
-                lineType=cv2.LINE_AA
-            )
-
-        # Blend semi-transparent fill
         alpha = 0.22
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
         return frame
 
-    def draw_tracked_persons(self, frame: np.ndarray, tracking_result: TrackingResult) -> np.ndarray:
-        """Render person bounding boxes, persistent IDs, dwell time badges, and motion traces."""
+    def draw_bags(self, frame: np.ndarray, bag_boxes: List[np.ndarray]) -> np.ndarray:
+        if not self.config.show_boxes:
+            return frame
+        for b in bag_boxes:
+            x1, y1, x2, y2 = [int(v) for v in b]
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 60, 200), 1, lineType=cv2.LINE_AA)
+            cv2.putText(frame, "bag", (x1 + 3, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                        (200, 60, 200), 1, lineType=cv2.LINE_AA)
+        return frame
+
+    def draw_tracked_persons(self, frame: np.ndarray, tracking_result: TrackingResult,
+                             views: Optional[Callable[[int], object]] = None) -> np.ndarray:
+        """Person boxes coloured by suspicion level, ID + score label, wrist markers, motion traces."""
+        level_colors = {0: (255, 180, 40), 1: (0, 190, 255), 2: (0, 0, 255)}   # BGR: blue, amber, red
         for tid, person in tracking_result.tracked_persons.items():
             if person.frames_lost > 0:
                 self._draw_occluded(frame, tid, person)
                 continue
 
-            box = person.current_box
-            x1, y1, x2, y2 = [int(v) for v in box]
+            view = views(tid) if views else None
+            level = getattr(view, "level", 0)
+            score = getattr(view, "score", 0.0)
+            box_color = level_colors.get(level, level_colors[0])
+            if level == 0 and person.in_shelf_zone:
+                box_color = (0, 140, 255)
+            label_bg = (40, 40, 50) if level == 0 else tuple(int(c * 0.7) for c in box_color)
 
-            # Choose color scheme based on zone interaction
-            if person.in_shelf_zone:
-                box_color = (0, 80, 255)  # Alert Orange/Red
-                label_bg = (0, 60, 200)
-            else:
-                box_color = (255, 180, 40)  # Calm Teal/Blue
-                label_bg = (40, 40, 50)
+            x1, y1, x2, y2 = [int(v) for v in person.current_box]
 
-            # 1. Draw motion trace
             if self.config.show_track_traces and len(person.trajectory) > 1:
                 pts = np.array(person.trajectory, dtype=np.int32).reshape((-1, 1, 2))
                 cv2.polylines(frame, [pts], isClosed=False, color=box_color, thickness=2, lineType=cv2.LINE_AA)
-                # Small circle at centroid
-                cx, cy = int(person.centroid[0]), int(person.centroid[1])
-                cv2.circle(frame, (cx, cy), 3, (255, 255, 255), -1, lineType=cv2.LINE_AA)
 
-            # 2. Draw bounding box corners / rect
             if self.config.show_boxes:
-                # Clean sleek security box
-                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, self.config.box_thickness, lineType=cv2.LINE_AA)
+                thick = self.config.box_thickness + (2 if level == 2 else 0)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, thick, lineType=cv2.LINE_AA)
 
-            # 3. Draw ID and Dwell label
+            # Wrists: green = free, orange = in shelf, magenta = at pocket/bag.
+            for hand in getattr(view, "hands", []) or []:
+                if hand.point is None:
+                    continue
+                color = (80, 220, 80)
+                if hand.shelf_zone:
+                    color = (0, 140, 255)
+                if hand.in_pocket or hand.in_bag:
+                    color = (255, 0, 255)
+                cv2.circle(frame, (int(hand.point[0]), int(hand.point[1])), 6, color, -1, lineType=cv2.LINE_AA)
+                cv2.circle(frame, (int(hand.point[0]), int(hand.point[1])), 6, (255, 255, 255), 1, lineType=cv2.LINE_AA)
+
             if self.config.show_labels:
-                dwell_str = f" | {person.accumulated_dwell_seconds:.1f}s" if person.in_shelf_zone else ""
-                label_text = f"ID #{tid}{dwell_str}"
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                scale = 0.5
-                thickness = 1
+                tag = {1: " REVIEW", 2: " ALERT"}.get(level, "")
+                label_text = f"ID #{tid} | {score:.2f}{tag}" if view is not None else f"ID #{tid}"
+                font, scale, thickness = cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
                 t_size = cv2.getTextSize(label_text, font, scale, thickness)[0]
-
-                # Label tag
                 lbl_y1 = max(35, y1)
                 cv2.rectangle(frame, (x1, lbl_y1 - t_size[1] - 8), (x1 + t_size[0] + 10, lbl_y1), label_bg, -1)
                 cv2.rectangle(frame, (x1, lbl_y1 - t_size[1] - 8), (x1 + t_size[0] + 10, lbl_y1), box_color, 1)
-                cv2.putText(frame, label_text, (x1 + 5, lbl_y1 - 4), font, scale, (255, 255, 255), thickness, lineType=cv2.LINE_AA)
+                cv2.putText(frame, label_text, (x1 + 5, lbl_y1 - 4), font, scale, (255, 255, 255), thickness,
+                            lineType=cv2.LINE_AA)
 
         return frame
 
@@ -176,12 +178,14 @@ class SecurityAnnotator:
         # Left: Brand & Status dot
         status_color = (0, 220, 0) if connection_status == "LIVE" else (0, 0, 220)
         cv2.circle(frame, (14, 16), 4, status_color, -1, lineType=cv2.LINE_AA)
-        cv2.putText(frame, f"PHARMAGUARD v0.1.0  [{connection_status}]", (26, 21), font, font_scale, (230, 230, 230), thickness, lineType=cv2.LINE_AA)
+        left_text = f"PHARMAGUARD [{connection_status}]"
+        cv2.putText(frame, left_text, (26, 21), font, font_scale, (230, 230, 230), thickness, lineType=cv2.LINE_AA)
+        left_end = 26 + cv2.getTextSize(left_text, font, font_scale, thickness)[0][0]
 
-        # Middle: Active Tracks & Alerts
+        # Middle: Active Tracks & Alerts (never overlapping the left block on narrow frames)
         stats_text = f"TRACKED: {active_tracks} | ALERTS: {alert_count}"
         t_size = cv2.getTextSize(stats_text, font, font_scale, thickness)[0]
-        mid_x = (w - t_size[0]) // 2
+        mid_x = max((w - t_size[0]) // 2, left_end + 14)
         cv2.putText(frame, stats_text, (mid_x, 21), font, font_scale, (200, 200, 200), thickness, lineType=cv2.LINE_AA)
 
         # Right: FPS & Latency

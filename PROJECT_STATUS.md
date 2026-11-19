@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-19 (Priorities 1-2 done locally; branch `p1-streaming-pipeline`, not yet merged to `main`)
+**Last updated**: 2026-11-19 (Priorities 1-2 merged to `main`; Priority 3 on branch `p3-behaviour-engine`)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 62 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+**Test suite**: 81 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -23,6 +23,10 @@
 | Multi-person tracking: no ID switches or swaps on walking at 3-25 FPS, crossing paths, side-by-side walkers, partial (low-conf) and 1 s full occlusion, 5-person crowd | Ground-truth scenario tests (`tests/test_tracker.py`); old-vs-new table in TECHNICAL_DECISIONS §6 |
 | One-frame false positives never get an ID; lost tracks expire after 2 s of real time | Scenario tests at 5 and 30 FPS |
 | Real YOLO + tracker: one stable ID per person on a panned photo | `test_tracker_with_real_detector_on_panning_photo`, `tools/track_video.py` at 5 FPS |
+| Pose model returns wrist keypoints aligned with person boxes on real imagery | `test_pose_model_returns_aligned_wrist_keypoints_on_real_people` |
+| Behaviour engine, mandate §6 scenarios (scripted skeletons): walk past / browse / pick up & return / own-bag reach / slow transfer / hidden hands give **no** review or alert; shelf→bag→leave gives **one REVIEW + one ALERT**; shelf→pocket→leave gives **REVIEW only**; only the concealer is flagged when 2 people are present | `tests/test_behavior.py` (18 tests) |
+| One alert per incident; new incident after decay alerts again | `test_one_incident_one_alert_then_new_incident_after_decay` |
+| Full pipeline (tracker → behaviour → alerts → timeline) emits exactly `[WARNING, ALERT]` for shelf→bag→leave | `test_end_to_end_shelf_to_bag_sequence_raises_one_review_and_one_alert` |
 | Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
 | Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
 
@@ -34,7 +38,7 @@
 |---|---|---|
 | detect (YOLOv8n, imgsz 640) | 82.4 | 123.5 |
 | track (ByteTrack + Kalman, after rewrite) | 1.3 | 1.5 |
-| behaviour | 0.1 | 0.1 |
+| behaviour (hand engine, after P3) | 1.2 | 1.8 |
 | annotate | 3.5 | 4.2 |
 | JPEG return encode | 5.1 | 8.8 |
 | **total** | **93.7** | **137.2** |
@@ -63,16 +67,17 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 
 | Ref | Defect | Planned |
 |---|---|---|
-| B4 | Zone rule uses feet; a webcam facing a shelf cannot trigger zones | Priority 3 (hand/wrist via pose) |
-| B1–B3 | Walking past triggers RAPID RETREAT; one dwell incident re-alerts every 10 s; two shoppers produce 9 alerts in 30 s | Priority 3/4 |
-| B5 | With multiple zones, all zones show OCCUPIED when any one is occupied | Priority 3 |
+| P3-1 | **False-alert / miss rates on real staged footage are unmeasured.** Logic is verified only on scripted skeletons | Owner records the scenarios in docs/DEMO_STAGING.md |
+| P3-2 | A relaxed hand at the hip registers as "pocket" on real imagery (harmless unless within 3 s after a shelf contact by the same hand); `pocket_radius_torso` uncalibrated | Calibrate on staged clips |
+| P3-3 | CPU only: pose + bag detection caps compute at ~6.9 FPS (11.6 FPS without bags). GPU unmeasured | Colab run |
 | R8 | One pipeline is shared by all sessions; two simultaneous streams corrupt tracker state | Before demo: single-operator lock |
-| — | No audible alarm, acknowledgement, event database, evidence clips, or zone editor | Priorities 4–6 |
+| — | No audible alarm, acknowledgement, event database, evidence clips, or zone editor (zones via `configs/demo_shelf.yaml`) | Priorities 4–6 |
 
 ## 5. Next priorities
 
-1. **Owner:** live Colab run plus staged tracking clips (Section 3).
-2. **Priority 3 — behaviour (Nov 22–25):** add YOLOv8n-pose wrist keypoints; shelf zones judged by hand entry (the webcam faces a mock shelf); bag/pocket regions relative to the person; a per-person incident state machine with a configurable suspicion score; one alert per incident; behaviour and alerts driven by frame timestamps rather than the wall clock.
+1. **Owner:** live Colab run (Section 3), then record the staged scenarios in `docs/DEMO_STAGING.md` and run `tools/track_video.py` on each. Record false alerts and misses here.
+2. **Priority 4 — alarm system:** audible browser alarm on ALERT only, visual banner, acknowledge/reset (operator), manual alarm test button. Duplicate prevention already comes from the per-incident latch.
+3. **Priority 5 — event recording:** SQLite on Drive (event id, timestamp, camera id, track id, category, score, reasons), plus a pre/post-event evidence clip ring buffer.
 
 ## 6. How to run
 

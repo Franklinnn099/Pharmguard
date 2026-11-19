@@ -13,7 +13,7 @@ import numpy as np
 import cv2
 import torch
 
-from pharmaguard.config import PharmaGuardConfig
+from pharmaguard.config import PharmaGuardConfig, DetectorConfig
 from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult
 from pharmaguard.tracker import ByteTrackerWrapper, TrackingResult, TrackedPerson
 from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
@@ -71,7 +71,16 @@ class PharmaGuardPipeline:
         # Component Initialization
         self.detector = detector or YOLODetector(self.config.detector)
         self.tracker = ByteTrackerWrapper(self.config.tracker)
-        self.behavior_analyzer = PharmacyBehaviorAnalyzer(self.config.zones)
+        self.behavior_analyzer = PharmacyBehaviorAnalyzer(self.config.zones, self.config.behavior)
+        self.object_detector: Optional[BaseDetector] = None
+        if self.config.objects.enabled:
+            oc = self.config.objects
+            self.object_detector = YOLODetector(DetectorConfig(
+                model_name=oc.model_name, confidence_threshold=oc.confidence_threshold,
+                target_classes=oc.target_classes, device=self.config.detector.device,
+                imgsz=self.config.detector.imgsz, half_precision=self.config.detector.half_precision,
+            ))
+        self.bag_boxes: List[np.ndarray] = []
         self.alert_manager = AlertManager(self.config.alert)
         self.event_manager = EventManager()
         self.annotator = SecurityAnnotator(self.config.display)
@@ -97,6 +106,10 @@ class PharmaGuardPipeline:
         }
 
         model_info = self.detector.get_model_info()
+        self.hand_analysis = bool(model_info.get("has_keypoints", False))
+        if not self.hand_analysis:
+            logger.warning("Detector '%s' provides no pose keypoints: hand/shelf/bag analysis is DISABLED; "
+                           "use a *-pose model (default yolov8n-pose.pt).", model_info.get("model_name"))
         self.device = model_info.get("device", "cpu")
         self.model_name = model_info.get("model_name", "unknown")
 
@@ -145,13 +158,22 @@ class PharmaGuardPipeline:
 
         # 2. Multi-Object Tracking (ByteTrack)
         t_track_start = time.perf_counter()
-        tracking_result = self.tracker.update(detection_result, timestamp=timestamp)
+        ts = time.monotonic() if timestamp is None else float(timestamp)
+        tracking_result = self.tracker.update(detection_result, timestamp=ts)
         t_track_end = time.perf_counter()
         track_ms = (t_track_end - t_track_start) * 1000.0
 
-        # 3. Behavioral Analysis (Shelf Zone monitoring)
+        # 2b. Carried containers (bags), every Nth frame; boxes reused in between.
+        objects_ms = 0.0
+        if self.object_detector is not None and (self.frame_counter - 1) % self.config.objects.frame_stride == 0:
+            t_obj = time.perf_counter()
+            self.bag_boxes = list(self.object_detector.detect(frame_bgr).xyxy)
+            objects_ms = (time.perf_counter() - t_obj) * 1000.0
+
+        # 3. Behavioural analysis: hand-shelf-bag/pocket sequences and suspicion scoring
         t_beh_start = time.perf_counter()
-        behavior_events = self.behavior_analyzer.analyze(tracking_result, frame_width=w, frame_height=h)
+        behavior_events = self.behavior_analyzer.analyze(
+            tracking_result, frame_width=w, frame_height=h, timestamp=ts, bag_boxes=self.bag_boxes)
         t_beh_end = time.perf_counter()
         behavior_ms = (t_beh_end - t_beh_start) * 1000.0
 
@@ -160,25 +182,23 @@ class PharmaGuardPipeline:
 
         # Log new events to event timeline
         for b_evt in behavior_events:
-            if b_evt.severity in ("WARNING", "ALERT"):
-                self.event_manager.log(
-                    category="SECURITY",
-                    message=b_evt.description,
-                    metadata={"zone": b_evt.zone_name, "tracker_id": b_evt.tracker_id}
-                )
-
-        # Check which zones are occupied
-        zone_occupancy: Dict[str, bool] = {}
-        for zone in self.config.zones:
-            zone_occupancy[zone.name] = any(
-                p.in_shelf_zone for p in tracking_result.tracked_persons.values() if p.frames_lost == 0
+            self.event_manager.log(
+                category="SECURITY" if b_evt.severity in ("WARNING", "ALERT") else "INTERACTION",
+                message=b_evt.description,
+                metadata={"zone": b_evt.zone_name, "tracker_id": b_evt.tracker_id,
+                          "type": b_evt.event_type.value, "score": b_evt.score}
             )
+
+        # Per-zone activity: CONTACT (hand in zone) / PRESENCE / IDLE - computed per zone (audit B5).
+        zone_activity = self.behavior_analyzer.zone_activity()
 
         # 5. Visual Annotation
         t_ann_start = time.perf_counter()
         annotated_bgr = frame_bgr.copy()
-        annotated_bgr = self.annotator.draw_shelf_zones(annotated_bgr, self.config.zones, zone_occupancy)
-        annotated_bgr = self.annotator.draw_tracked_persons(annotated_bgr, tracking_result)
+        annotated_bgr = self.annotator.draw_shelf_zones(annotated_bgr, self.config.zones, zone_activity)
+        annotated_bgr = self.annotator.draw_bags(annotated_bgr, self.bag_boxes)
+        annotated_bgr = self.annotator.draw_tracked_persons(
+            annotated_bgr, tracking_result, views=self.behavior_analyzer.person_view)
 
         # HUD shows the previous frame's measured figures (this frame's are not final yet).
         tele = self.telemetry.snapshot()
@@ -204,6 +224,7 @@ class PharmaGuardPipeline:
         self.last_stage_timings = {
             "detect_ms": round(detect_ms, 2),
             "track_ms": round(track_ms, 2),
+            "objects_ms": round(objects_ms, 2),
             "behavior_ms": round(behavior_ms, 2),
             "annotate_ms": round(annotate_ms, 2),
             "total_backend_ms": round(self.latency_ms, 2)
@@ -217,6 +238,10 @@ class PharmaGuardPipeline:
             "model_name": self.model_name,
             "stage_timings": self.last_stage_timings,
             "detections_count": detection_result.count,
+            "bags_count": len(self.bag_boxes),
+            "new_alerts": new_alerts,
+            "behavior_events": behavior_events,
+            "zone_activity": zone_activity,
             "frame_counter": self.frame_counter
         }
 
@@ -259,6 +284,8 @@ class PharmaGuardPipeline:
         """Reset trackers and alerts for fresh session."""
         with self._lock:
             self.tracker.reset()
+            self.behavior_analyzer.reset()
+            self.bag_boxes = []
             self.alert_manager.clear()
             self.event_manager.clear()
             self.telemetry.reset()

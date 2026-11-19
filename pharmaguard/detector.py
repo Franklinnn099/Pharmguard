@@ -20,6 +20,8 @@ class DetectionResult:
     confidence: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     class_id: np.ndarray = field(default_factory=lambda: np.empty((0,), dtype=np.int32))
     class_name: List[str] = field(default_factory=list)
+    # Optional COCO-17 keypoints from pose models, shape (N, 17, 3) = (x, y, confidence) in pixels.
+    keypoints: Optional[np.ndarray] = None
 
     @property
     def count(self) -> int:
@@ -27,6 +29,21 @@ class DetectionResult:
 
     def is_empty(self) -> bool:
         return self.count == 0
+
+    def subset(self, mask: np.ndarray) -> "DetectionResult":
+        """Rows selected by a boolean mask or index array, keypoints kept aligned."""
+        idx = np.arange(self.count)[mask]
+        return DetectionResult(
+            xyxy=self.xyxy[idx], confidence=self.confidence[idx], class_id=self.class_id[idx],
+            class_name=[self.class_name[i] for i in idx] if self.class_name else [],
+            keypoints=None if self.keypoints is None else self.keypoints[idx],
+        )
+
+
+# COCO-17 keypoint indices used by the behaviour engine.
+KP_L_SHOULDER, KP_R_SHOULDER = 5, 6
+KP_L_WRIST, KP_R_WRIST = 9, 10
+KP_L_HIP, KP_R_HIP = 11, 12
 
 
 class BaseDetector(ABC):
@@ -126,12 +143,19 @@ class YOLODetector(BaseDetector):
         class_id = boxes.cls.cpu().numpy().astype(np.int32)
         names = result.names or {0: "person"}
         class_name = [names.get(int(cid), f"class_{cid}") for cid in class_id]
+        keypoints = None
+        kp = getattr(result, "keypoints", None)
+        if kp is not None and getattr(kp, "data", None) is not None and len(kp.data) == len(xyxy):
+            keypoints = kp.data.cpu().numpy().astype(np.float32)
+            if keypoints.shape[-1] == 2:  # some exports omit confidence
+                keypoints = np.concatenate([keypoints, np.ones(keypoints.shape[:-1] + (1,), np.float32)], -1)
 
         return DetectionResult(
             xyxy=xyxy,
             confidence=confidence,
             class_id=class_id,
-            class_name=class_name
+            class_name=class_name,
+            keypoints=keypoints,
         )
 
     def get_model_info(self) -> Dict[str, Any]:
@@ -141,6 +165,7 @@ class YOLODetector(BaseDetector):
             "device": self.device,
             "imgsz": self.config.imgsz,
             "half_precision": self.half,
+            "has_keypoints": bool(getattr(self.model, "task", "") == "pose"),
             "confidence_threshold": self.config.confidence_threshold,
             "iou_threshold": self.config.iou_threshold,
             "target_classes": self.config.target_classes,

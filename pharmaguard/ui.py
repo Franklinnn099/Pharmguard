@@ -210,16 +210,19 @@ def create_pharmaguard_ui(
             {},
         )
 
-    def update_thresholds(conf: float, dwell: float):
+    def update_thresholds(conf: float, alert_threshold: float):
         # Detector floor stays low so ByteTrack's low-confidence stage keeps occluded people;
         # the operator-facing threshold governs which detections can start/drive tracks.
         trk = pipeline.tracker.config
         trk.track_high_threshold = conf
         trk.new_track_threshold = min(1.0, conf + 0.05)
         trk.track_low_threshold = min(trk.track_low_threshold, conf)
-        for z in pipeline.config.zones:
-            z.dwell_alert_threshold_sec = dwell
-        return f"Updated: Conf={conf:.2f}, Dwell={dwell:.1f}s"
+        beh = pipeline.behavior_analyzer.config
+        beh.alert_threshold = alert_threshold
+        # Keep REVIEW strictly below ALERT and above what browsing alone can reach.
+        beh.review_threshold = max(beh.browsing_cap + 0.05, min(beh.review_threshold, alert_threshold - 0.1))
+        return (f"Updated: person conf={conf:.2f}, alert at score {alert_threshold:.2f}, "
+                f"review at {beh.review_threshold:.2f}")
 
     with gr.Blocks(title="PharmaGuard — Pharmacy AI Surveillance") as demo:
         # Custom CSS injection (Gradio 4/5/6 universal compatibility)
@@ -231,7 +234,7 @@ def create_pharmaguard_ui(
             with gr.Column(scale=8):
                 gr.HTML("""
                 <div class='header-title'>🛡️ PHARMAGUARD — AI Pharmacy Security Monitor</div>
-                <div class='header-subtitle'>Flags potentially suspicious shelf interactions for staff review</div>
+                <div class='header-subtitle'>Flags potentially suspicious shelf interactions for staff review - it does not determine theft or intent</div>
                 """)
             with gr.Column(scale=4, min_width=200):
                 gr.HTML(f"""
@@ -307,8 +310,8 @@ def create_pharmaguard_ui(
                         label="Person confidence threshold (tracking)"
                     )
                     dwell_slider = gr.Slider(
-                        minimum=2.0, maximum=30.0, value=cfg.zones[0].dwell_alert_threshold_sec, step=1.0,
-                        label="Shelf Dwell Alert Threshold (seconds)"
+                        minimum=0.6, maximum=2.0, value=cfg.behavior.alert_threshold, step=0.05,
+                        label="Alert threshold (suspicion score; shelf->bag->exit ~1.1, shelf->pocket->exit ~0.85)"
                     )
                     apply_btn = gr.Button("Apply Settings", size="sm")
                     cfg_status = gr.Textbox(label="Config Status", interactive=False, max_lines=1)

@@ -30,6 +30,10 @@ class SecurityAlert:
     title: str
     message: str
     dwell_time_seconds: float = 0.0
+    score: float = 0.0
+    reasons: List[str] = field(default_factory=list)
+    incident_id: int = 0
+    event_type: str = ""
 
     def to_dict(self) -> Dict:
         return {
@@ -40,7 +44,11 @@ class SecurityAlert:
             "tracker_id": self.tracker_id,
             "title": self.title,
             "message": self.message,
-            "dwell_time_sec": self.dwell_time_seconds
+            "dwell_time_sec": self.dwell_time_seconds,
+            "score": self.score,
+            "reasons": self.reasons,
+            "incident_id": self.incident_id,
+            "event_type": self.event_type,
         }
 
 
@@ -61,38 +69,44 @@ class AlertManager:
     def process_behavior_events(self, events: List[BehaviorEvent]) -> List[SecurityAlert]:
         """Convert behavior events into actionable alerts if cooldown has expired."""
         generated_alerts: List[SecurityAlert] = []
-        now = time.time()
 
         for event in events:
             # We only generate alerts for WARNING and ALERT events, or significant status changes
             if event.severity not in ("WARNING", "ALERT"):
                 continue
 
+            # Cooldown runs on the event's frame time (live clock or video time) so it is deterministic.
+            now = event.timestamp
             cooldown_key = (event.tracker_id, event.zone_name, event.event_type)
-            last_time = self._last_alert_triggered.get(cooldown_key, 0.0)
+            last_time = self._last_alert_triggered.get(cooldown_key)
 
-            if (now - last_time) < self.config.cooldown_seconds:
+            if last_time is not None and (now - last_time) < self.config.cooldown_seconds:
                 # In cooldown period; suppress to avoid overwhelming the operator
                 continue
 
             self._last_alert_triggered[cooldown_key] = now
             self._alert_counter += 1
 
-            now_iso = datetime.fromtimestamp(now).strftime("%Y-%m-%d %H:%M:%S")
-            alert_id = f"PG-{int(now)}-{self._alert_counter:04d}"
+            wall = time.time()
+            now_iso = datetime.fromtimestamp(wall).strftime("%Y-%m-%d %H:%M:%S")
+            alert_id = f"PG-{int(wall)}-{self._alert_counter:04d}"
 
             title = self._format_alert_title(event)
 
             alert = SecurityAlert(
                 alert_id=alert_id,
                 timestamp_iso=now_iso,
-                epoch_timestamp=now,
+                epoch_timestamp=wall,
                 severity=event.severity,
                 zone_name=event.zone_name,
                 tracker_id=event.tracker_id,
                 title=title,
                 message=event.description,
-                dwell_time_seconds=event.dwell_time_seconds
+                dwell_time_seconds=event.dwell_time_seconds,
+                score=getattr(event, "score", 0.0),
+                reasons=list(getattr(event, "reasons", [])),
+                incident_id=getattr(event, "incident_id", 0),
+                event_type=event.event_type.value,
             )
 
             self.alert_history.insert(0, alert)
@@ -105,14 +119,13 @@ class AlertManager:
         return generated_alerts
 
     def _format_alert_title(self, event: BehaviorEvent) -> str:
-        """Create a clear, high-signal alert title."""
-        if event.event_type == BehaviorEventType.SUSPICIOUS_LOITERING:
-            return f"PROLONGED DWELL: Shelf {event.zone_name}"
-        elif event.event_type == BehaviorEventType.RAPID_RETREAT:
-            return f"RAPID RETREAT: Shelf {event.zone_name}"
-        elif event.event_type == BehaviorEventType.MULTI_PERSON_RESTRICTED:
-            return f"CONGREGATION: Shelf {event.zone_name}"
-        return f"ACTIVITY: Shelf {event.zone_name}"
+        """Clear, non-accusatory titles: the system flags interactions for human review."""
+        zone = event.zone_name or "shelf"
+        if event.event_type == BehaviorEventType.SUSPICION_ALERT:
+            return f"SUSPICIOUS SEQUENCE - review now: {zone} (person #{event.tracker_id})"
+        if event.event_type == BehaviorEventType.SUSPICION_REVIEW:
+            return f"REVIEW SUGGESTED: {zone} (person #{event.tracker_id})"
+        return f"ACTIVITY: {zone}"
 
     def _persist_alert(self, alert: SecurityAlert) -> None:
         """Append alert record to JSON Lines log."""

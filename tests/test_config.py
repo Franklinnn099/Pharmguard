@@ -17,7 +17,7 @@ from pharmaguard.config import (
 def test_default_config_initialization():
     config = PharmaGuardConfig()
     assert config.app_name == "PharmaGuard Pharmacy Security Monitor"
-    assert config.detector.model_name == "yolov8n.pt"
+    assert config.detector.model_name == "yolov8n-pose.pt"
     assert config.detector.target_classes == [0]
     assert config.tracker.tracker_type == "bytetrack"
     assert len(config.zones) == 1
@@ -29,7 +29,7 @@ def test_default_config_initialization():
 def test_yaml_serialization_deserialization(tmp_path):
     config = PharmaGuardConfig()
     config.detector.confidence_threshold = 0.55
-    config.zones[0].dwell_alert_threshold_sec = 12.0
+    config.zones[0].prolonged_presence_sec = 12.0
 
     yaml_path = str(tmp_path / "test_config.yaml")
     config.save_to_yaml(yaml_path)
@@ -37,4 +37,4 @@ def test_yaml_serialization_deserialization(tmp_path):
     assert os.path.exists(yaml_path)
     loaded_config = PharmaGuardConfig.load_from_yaml(yaml_path)
     assert loaded_config.detector.confidence_threshold == 0.55
-    assert loaded_config.zones[0].dwell_alert_threshold_sec == 12.0
+    assert loaded_config.zones[0].prolonged_presence_sec == 12.0

@@ -76,14 +76,9 @@ The client runs on a laptop with a webcam. The compute backend runs in Google Co
 
 ## 4. Behavioral Sequence Analysis & Zone Representation
 
-### Spatial Modeling
-Pharmacy shelf zones are represented as **normalized 2D polygons** `[[x1, y1], [x2, y2], ...]`. Normalized coordinates ensure resolution independence (works identically whether the webcam outputs 480p, 720p, or 1080p).
-
-### Footprint/Centroid Grounding
-Rather than using the geometric center of the bounding box (which floats at torso height and can trigger false zone intersections), PharmaGuard evaluates the **bottom-center point** `((x1 + x2)/2, y2)` representing the individual's feet contacting the floor.
-
-### Temporal State Tracking
-Each tracked person maintains an accumulated dwell timer. When dwell time exceeds the configured threshold (default: 8.0s), an alert is triggered. To prevent alert storms, an alert cooldown mechanism (default: 10.0s) throttles repeat alerts for the same track ID.
+*Superseded on 2026-11-19 by §7.* The prototype's feet-in-floor-zone rules (dwell >= 8 s, "rapid retreat",
+"congregation") were replaced. Measured in the audit (B1-B4): they could not fire for a webcam facing a shelf,
+and they alerted on ordinary shoppers.
 
 ---
 
@@ -187,3 +182,55 @@ yields one stable ID per person at a simulated 5 FPS (`tools/track_video.py`,
 ### Known limits
 - No appearance re-identification. Someone hidden for more than 2 s, or who moves far while hidden, gets a new ID. This is acceptable for single-camera dwell and interaction logic; DeepSORT-style ReID was rejected for latency (§2).
 - Synthetic scenarios prove the logic, not real-world robustness. Staged webcam recordings of crossings and occlusion must be run through `tools/track_video.py` before Dec 1.
+
+---
+
+## 7. Behaviour Engine: Hand-Based Sequences + Decaying Suspicion Score (2026-11-19)
+
+### Context
+Demo setup (decided by the project owner): a laptop webcam facing a mock shelf, with people standing in front of it.
+Feet are often out of frame and irrelevant; what matters is **what hands do**. No custom training is allowed.
+
+### Signals (all from pretrained models)
+- **YOLOv8n-pose** replaces YOLOv8n as the person model. One pass gives person boxes plus 17 COCO keypoints;
+  CPU detect cost was roughly unchanged in the benchmark (pose 92 ms p50 vs 82-94 ms plain). Wrists, hips and shoulders are used.
+- **YOLOv8n (COCO)** every 3rd frame for bags (backpack 24, handbag 26, suitcase 28). It costs ~99 ms on CPU when
+  it runs and is disabled with `objects.enabled: false`.
+
+### Geometry (`pharmaguard/interaction.py`, stateless)
+- **Shelf contact**: wrist inside a shelf polygon **and outside the person's own torso box**. The shelf is behind
+  the person in the image, so without this exclusion hands held at chest height "touch" the shelf
+  (`test_geometry_hands_at_chest_are_not_shelf_contact_even_though_shelf_is_behind`).
+- **Pocket**: wrist within 0.30 torso-lengths of a visible hip keypoint and not above the hip line. If the hips are
+  not visible, the pocket test is skipped rather than guessed.
+- **Bag**: wrist inside a detected bag box (expanded 10%) that overlaps the person's box.
+
+### Temporal logic (`pharmaguard/behavior.py`)
+- Contacts are debounced (0.3 s in and out). A **transfer** requires the SAME hand to reach the pocket (held 0.6 s) or a
+  bag (held 0.3 s) within **3 s** of leaving the shelf. A slow transfer after examining is ordinary handling.
+- **Return cancels pocket**: if the same hand touches the shelf again within 15 s, earlier pocket evidence is removed
+  (item examined at the waist and put back). Bag evidence is not cancelled.
+- **Exit**: moving away from the shelf for 1.5 s, or leaving view, within 8 s of a transfer adds evidence.
+- **Score**: weighted evidence with a 30 s half-life. Weights: contact 0.10, repeated contacts 0.15, prolonged presence 0.15,
+  pocket 0.45, bag 0.70, exit 0.30. **Browsing evidence is capped at 0.35, below REVIEW 0.60**, so browsing alone
+  can never trigger anything.
+- **Levels and latching**: REVIEW (visual) at 0.60, ALERT (alarm) at 1.00. Each fires once per incident. An incident closes when
+  its **concealment** evidence decays below 0.25; browsing is ignored here. Found by test: with the total score, a person
+  who kept browsing after an alert stayed latched and a new concealment minutes later was silently swallowed.
+- Typical outcomes: shelf->bag->exit = 1.10 (REVIEW at the transfer, ALERT on exit); shelf->pocket->exit = 0.85 (REVIEW only).
+- All timing uses frame timestamps, so recorded clips give exactly the live behaviour, and AlertManager cooldowns use frame time too.
+
+### Verified (scripted skeleton scenarios, `tests/test_behavior.py`)
+Walk past, browse with 5 contacts, a long browse, pick-up and return via the hip, reaching your own bag, slow transfer,
+and hidden hands all produce **no REVIEW/ALERT**. Shelf->bag->leave gives one REVIEW plus one ALERT in the same incident.
+Shelf->pocket->leave gives REVIEW only. With two people, only the concealer is flagged. A repeat concealment while latched
+raises no new alert; after decay, a new incident raises a new alert. The full pipeline (scripted pose detector -> tracker ->
+behaviour -> AlertManager) produces exactly `[WARNING, ALERT]`.
+
+### Limitations (must be stated in the demo)
+- Synthetic skeletons validate the logic, not real-world rates. **False-alert and miss rates on real staged footage
+  are not yet measured**; see docs/DEMO_STAGING.md for the protocol.
+- On a real photo, a relaxed hand resting at the hip is geometrically "at pocket". It is harmless unless it occurs within
+  3 s after a shelf contact by the same hand, but it is the weakest signal and `pocket_radius_torso` needs calibration.
+- The system cannot see products. It infers from hand trajectories, so palming without visible arm motion is missed.
+- Camera geometry matters: the reaching arm must be visible (camera ~45 degrees to the side).

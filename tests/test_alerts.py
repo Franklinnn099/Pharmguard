@@ -1,54 +1,66 @@
 """
-Unit tests for PharmaGuard alert management and throttling.
+Unit tests for PharmaGuard alert management: severity filtering, frame-time cooldown, persistence.
 """
 
+import json
 import os
-import time
-import pytest
+
 from pharmaguard.config import AlertConfig
 from pharmaguard.behavior import BehaviorEvent, BehaviorEventType
-from pharmaguard.alerts import AlertManager, SecurityAlert
+from pharmaguard.alerts import AlertManager
+
+
+def _alert_event(t: float, tid: int = 1) -> BehaviorEvent:
+    return BehaviorEvent(
+        event_type=BehaviorEventType.SUSPICION_ALERT,
+        tracker_id=tid,
+        zone_name="Shelf_A",
+        timestamp=t,
+        description="Suspicious interaction sequence: Person #1, score 1.10.",
+        severity="ALERT",
+        score=1.1,
+        reasons=["R hand moved from Shelf_A to a bag 0.4s after shelf contact"],
+        incident_id=3,
+    )
 
 
 def test_alert_generation_and_cooldown(tmp_path):
     log_file = str(tmp_path / "test_alerts.jsonl")
-    config = AlertConfig(cooldown_seconds=5.0, alert_log_file=log_file)
-    manager = AlertManager(config)
+    manager = AlertManager(AlertConfig(cooldown_seconds=5.0, alert_log_file=log_file))
 
-    event = BehaviorEvent(
-        event_type=BehaviorEventType.SUSPICIOUS_LOITERING,
-        tracker_id=1,
-        zone_name="Shelf_A",
-        dwell_time_seconds=9.5,
-        description="Person #1 loitering in Shelf_A",
-        severity="ALERT"
-    )
-
-    # First event should trigger an alert
-    alerts = manager.process_behavior_events([event])
+    alerts = manager.process_behavior_events([_alert_event(100.0)])
     assert len(alerts) == 1
-    assert alerts[0].tracker_id == 1
-    assert alerts[0].severity == "ALERT"
-    assert len(manager.alert_history) == 1
-    assert os.path.exists(log_file)
+    a = alerts[0]
+    assert a.tracker_id == 1 and a.severity == "ALERT" and a.score == 1.1 and a.incident_id == 3
+    assert "review" in a.title.lower()
 
-    # Immediate second identical event should be suppressed by cooldown
-    alerts_suppressed = manager.process_behavior_events([event])
-    assert len(alerts_suppressed) == 0
-    assert len(manager.alert_history) == 1
+    # Same alert within cooldown (frame time) is suppressed; after cooldown it is allowed.
+    assert manager.process_behavior_events([_alert_event(102.0)]) == []
+    assert len(manager.process_behavior_events([_alert_event(105.5)])) == 1
+    assert len(manager.alert_history) == 2
+
+    records = [json.loads(line) for line in open(log_file, encoding="utf-8")]
+    assert records[0]["score"] == 1.1 and records[0]["incident_id"] == 3
+    assert records[0]["reasons"] and records[0]["event_type"] == "SUSPICION_ALERT"
 
 
 def test_info_severity_suppression():
-    config = AlertConfig()
-    manager = AlertManager(config)
-
-    # INFO severity event (routine entry) should not trigger security alert
+    manager = AlertManager(AlertConfig(alert_log_file=None))
     info_event = BehaviorEvent(
-        event_type=BehaviorEventType.ZONE_ENTER,
+        event_type=BehaviorEventType.SHELF_CONTACT,
         tracker_id=2,
         zone_name="Shelf_A",
-        description="Person #2 entered zone",
-        severity="INFO"
+        timestamp=0.0,
+        description="Person #2 R hand reached into Shelf_A",
+        severity="INFO",
     )
-    alerts = manager.process_behavior_events([info_event])
-    assert len(alerts) == 0
+    assert manager.process_behavior_events([info_event]) == []
+
+
+def test_persistence_failure_is_logged_not_raised(tmp_path, caplog):
+    bad_path = str(tmp_path / "is_a_dir")
+    os.makedirs(bad_path)
+    manager = AlertManager(AlertConfig(alert_log_file=bad_path))
+    alerts = manager.process_behavior_events([_alert_event(1.0)])
+    assert len(alerts) == 1
+    assert any("Failed to persist alert" in r.message for r in caplog.records)

@@ -134,6 +134,8 @@ class TrackedPerson:
     in_shelf_zone: bool = False
     shelf_entry_timestamp: Optional[float] = None
     accumulated_dwell_seconds: float = 0.0
+    # COCO-17 keypoints (17, 3) from the matched detection; None while LOST or with a non-pose model.
+    keypoints: Optional[np.ndarray] = field(default=None, repr=False)
     # Kalman state (internal)
     kf_mean: Optional[np.ndarray] = field(default=None, repr=False)
     kf_cov: Optional[np.ndarray] = field(default=None, repr=False)
@@ -181,12 +183,14 @@ class ByteTrackerWrapper:
         self._last_ts: Optional[float] = None
 
     # ------------------------------------------------------------------ helpers
-    def _new_candidate(self, box: np.ndarray, conf: float, ts: float) -> TrackedPerson:
+    def _new_candidate(self, box: np.ndarray, conf: float, ts: float,
+                       kp: Optional[np.ndarray] = None) -> TrackedPerson:
         mean, cov = self.kf.initiate(xyxy_to_xyah(box))
         cx, cy = float((box[0] + box[2]) / 2.0), float((box[1] + box[3]) / 2.0)
         return TrackedPerson(tracker_id=0, current_box=box.astype(np.float32), confidence=conf,
                              centroid=(cx, cy), state=TrackState.NEW, trajectory=[(cx, cy)],
-                             first_seen_time=ts, last_seen_time=ts, kf_mean=mean, kf_cov=cov)
+                             first_seen_time=ts, last_seen_time=ts, kf_mean=mean, kf_cov=cov,
+                             keypoints=kp)
 
     def _predict(self, track: TrackedPerson, steps: float) -> None:
         if track.state == TrackState.LOST:
@@ -195,10 +199,12 @@ class ByteTrackerWrapper:
             track.kf_mean[7] = 0.0
         track.kf_mean, track.kf_cov = self.kf.predict(track.kf_mean, track.kf_cov, steps)
 
-    def _apply_detection(self, track: TrackedPerson, box: np.ndarray, conf: float, ts: float) -> None:
+    def _apply_detection(self, track: TrackedPerson, box: np.ndarray, conf: float, ts: float,
+                         kp: Optional[np.ndarray] = None) -> None:
         track.kf_mean, track.kf_cov = self.kf.update(track.kf_mean, track.kf_cov, xyxy_to_xyah(box))
         track.current_box = box.astype(np.float32)
         track.confidence = conf
+        track.keypoints = kp
         cx, cy = float((box[0] + box[2]) / 2.0), float((box[1] + box[3]) / 2.0)
         track.centroid = (cx, cy)
         track.velocity = track.kf_mean[4:6].astype(np.float32)
@@ -275,10 +281,14 @@ class ByteTrackerWrapper:
 
         boxes = detections.xyxy if not detections.is_empty() else np.empty((0, 4), np.float32)
         scores = detections.confidence if not detections.is_empty() else np.empty((0,), np.float32)
+        kps = detections.keypoints if (detections.keypoints is not None and not detections.is_empty()) else None
         high = scores >= cfg.track_high_threshold
         low = (scores >= cfg.track_low_threshold) & ~high
         hi_boxes, hi_scores = boxes[high], scores[high]
         lo_boxes, lo_scores = boxes[low], scores[low]
+        hi_kps = kps[high] if kps is not None else None
+        lo_kps = kps[low] if kps is not None else None
+        _kp = lambda arr, i: None if arr is None else arr[i]
 
         confirmed = list(self.tracked_registry.values())
         for t in confirmed + self._candidates:
@@ -290,7 +300,7 @@ class ByteTrackerWrapper:
         m1, un_trk, un_hi = self._associate(confirmed, hi_boxes, hi_scores, cfg.match_iou_threshold,
                                             fuse_score=True, now=ts, motion_fallback=True)
         for ti, di in m1:
-            self._apply_detection(confirmed[ti], hi_boxes[di], float(hi_scores[di]), ts)
+            self._apply_detection(confirmed[ti], hi_boxes[di], float(hi_scores[di]), ts, _kp(hi_kps, di))
             active_ids.append(confirmed[ti].tracker_id)
 
         # Stage 2: remaining *currently tracked* tracks <-> low-confidence detections
@@ -299,7 +309,7 @@ class ByteTrackerWrapper:
         r_lost = [t for t in remaining if t.state != TrackState.TRACKED]
         m2, un_trk2, _ = self._associate(r_tracked, lo_boxes, lo_scores, cfg.low_match_iou_threshold, fuse_score=False)
         for ti, di in m2:
-            self._apply_detection(r_tracked[ti], lo_boxes[di], float(lo_scores[di]), ts)
+            self._apply_detection(r_tracked[ti], lo_boxes[di], float(lo_scores[di]), ts, _kp(lo_kps, di))
             active_ids.append(r_tracked[ti].tracker_id)
 
         # Unmatched confirmed tracks become / stay LOST; expire on real elapsed time.
@@ -309,6 +319,7 @@ class ByteTrackerWrapper:
             t.state = TrackState.LOST
             t.frames_lost += 1
             t.current_box = t.predict_box()
+            t.keypoints = None
             if t.seconds_since_seen(ts) > cfg.lost_track_seconds:
                 t.state = TrackState.REMOVED
                 removed.append(t.tracker_id)
@@ -318,6 +329,7 @@ class ByteTrackerWrapper:
 
         # Stage 3: candidates <-> remaining high detections; confirm after enough consecutive hits.
         rem_hi_boxes, rem_hi_scores = hi_boxes[un_hi], hi_scores[un_hi]
+        rem_hi_kps = hi_kps[un_hi] if hi_kps is not None else None
         m3, un_cand, un_hi2 = self._associate(self._candidates, rem_hi_boxes, rem_hi_scores,
                                               cfg.unconfirmed_match_iou_threshold, fuse_score=True,
                                               now=ts, motion_fallback=True)
@@ -325,7 +337,7 @@ class ByteTrackerWrapper:
         survivors: List[TrackedPerson] = []
         for ci, di in m3:
             cand = self._candidates[ci]
-            self._apply_detection(cand, rem_hi_boxes[di], float(rem_hi_scores[di]), ts)
+            self._apply_detection(cand, rem_hi_boxes[di], float(rem_hi_scores[di]), ts, _kp(rem_hi_kps, di))
             if cand.hits >= cfg.min_confirm_hits:
                 cand.tracker_id = self._next_id
                 self._next_id += 1
@@ -340,7 +352,7 @@ class ByteTrackerWrapper:
         # New candidates from leftover confident detections.
         for di in un_hi2:
             if rem_hi_scores[di] >= cfg.new_track_threshold:
-                cand = self._new_candidate(rem_hi_boxes[di], float(rem_hi_scores[di]), ts)
+                cand = self._new_candidate(rem_hi_boxes[di], float(rem_hi_scores[di]), ts, _kp(rem_hi_kps, di))
                 if cfg.min_confirm_hits <= 1:
                     cand.tracker_id = self._next_id
                     self._next_id += 1

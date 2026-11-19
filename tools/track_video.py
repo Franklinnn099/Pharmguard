@@ -12,8 +12,9 @@ Typical uses:
 Report: IDs issued, max simultaneous people, and per-ID lifetime / occlusion counts. For a staged clip
 with N actors, "IDs issued" > N means ID switches or false tracks - inspect the annotated output.
 
-Note: behaviour/dwell timing still uses the wall clock until the Priority-3 rewrite, so zone dwell
-figures in the output video are not meaningful when processing faster than real time.
+Behaviour analysis also runs on video time, so the REVIEW / ALERT events listed at the end are exactly
+what the live system would raise for the same footage. Use this to count false alerts and missed events
+on staged scenarios (docs/DEMO_STAGING.md).
 """
 
 import argparse
@@ -60,6 +61,7 @@ def main() -> None:
     writer = None
     stats: dict[int, IdStats] = {}
     max_simultaneous = 0
+    flagged = []
     processed = 0
     next_t = 0.0
     idx = -1
@@ -78,6 +80,8 @@ def main() -> None:
 
         out = pipeline.process_frame(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB), timestamp=t)
         processed += 1
+        for a in out.metadata.get("new_alerts", []):
+            flagged.append((t, a))
         persons = pipeline.tracker.tracked_registry
         visible = [tid for tid, p in persons.items() if p.frames_lost == 0]
         max_simultaneous = max(max_simultaneous, len(visible))
@@ -111,6 +115,12 @@ def main() -> None:
     for tid in sorted(stats):
         s = stats[tid]
         print(f"{tid:>4} {s.first_t:>8.2f} {s.last_t:>8.2f} {s.frames_visible:>11} {s.frames_occluded:>12}")
+    print("=" * 66)
+    print(f"Staff-review events: {len(flagged)}")
+    for t, a in flagged:
+        print(f"  t={t:6.1f}s  {a.severity:<7} person #{a.tracker_id}  score {a.score:.2f}  incident {a.incident_id}")
+        for r in a.reasons:
+            print(f"             - {r}")
     print("=" * 66)
     if args.out:
         print(f"Annotated video  : {args.out}")

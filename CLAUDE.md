@@ -26,6 +26,8 @@ pharmguard/
 ├── main.py                         # Root entry point
 ├── benchmark.py                    # Server-side compute benchmark (incl. return-frame encode)
 ├── docs/AUDIT_2026-11-19.md        # Takeover audit: verified defects, measurements, risks
+├── docs/DEMO_STAGING.md            # Camera placement, zone setup, staged scenario protocol
+├── configs/demo_shelf.yaml         # Demo zones/thresholds (pass with --config)
 ├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
 ├── tools/track_video.py            # Run pipeline on recorded video (video time); tracking report + annotated MP4
 │
@@ -34,7 +36,8 @@ pharmguard/
 │   ├── config.py                   # Pydantic schemas (detector, tracker, zones, alerts, UI)
 │   ├── detector.py                 # BaseDetector interface & YOLODetector implementation
 │   ├── tracker.py                  # ByteTrack + time-scaled Kalman + motion fallback gate
-│   ├── behavior.py                 # PharmacyBehaviorAnalyzer (dwell, loitering, rapid retreat)
+│   ├── interaction.py              # Per-frame hand geometry: wrist in shelf / pocket / bag (stateless)
+│   ├── behavior.py                 # Temporal sequences, decaying suspicion score, incident latching
 │   ├── alerts.py                   # AlertManager (throttling, severity grading, JSONL logging)
 │   ├── events.py                   # EventManager (chronological ring buffer)
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
@@ -52,7 +55,8 @@ pharmguard/
     ├── test_detector.py            # Pretrained YOLO inference & empty-frame tests
     ├── test_tracker.py             # Ground-truth scenarios: speed/FPS sweep, crossing, occlusion, swaps
     ├── scenario_utils.py           # Synthetic scenario builders + identity evaluation
-    ├── test_behavior.py            # Spatial ROI, dwell time, & rapid retreat tests
+    ├── test_behavior.py            # Mandate §6 scenarios on scripted skeletons (false-alert & miss checks)
+    ├── behavior_scenarios.py       # Skeleton actor scripts for behaviour tests
     ├── test_alerts.py              # Cooldown throttling & persistence tests
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
@@ -97,8 +101,8 @@ python benchmark.py
 1. **Modular Architecture**: Keep functional boundaries clean. Do NOT combine UI, tracking, and detection logic into a single file.
 2. **Abstract Detectors**: All detection backends must inherit from `BaseDetector` in `pharmaguard/detector.py`. This ensures we can switch to Apache 2.0 models (e.g. RT-DETR) without modifying downstream trackers.
 3. **Normalized Coordinates**: Always represent visual zones and regions of interest (ROI) in normalized floats `[0.0, 1.0]` so they remain resolution-independent across varying webcam cameras.
-4. **Feet Ground Contact for Spatial Intersections**: Test spatial zone occupancy against the bottom center of the bounding box `((x1+x2)/2, y2)` rather than the geometric center to prevent false hits when a person's upper body leans across a boundary. *Applies to full-body CCTV views only.* With the laptop webcam facing a mock shelf, feet are usually out of frame, so shelf interaction must be judged from hand/wrist positions (Priority 3).
-5. **Alert Throttling**: Never emit unthrottled alert streams. Every security alert candidate must pass through `AlertManager.process_behavior_events()` with an enforceable cooldown window.
+4. **Hands, not feet, for shelf interaction**: a shelf contact is a wrist keypoint inside a shelf polygon AND outside the person's own torso box. The old feet-point rule applies only to full-body CCTV views and is not used by the behaviour engine.
+5. **Alert discipline**: alerts come only from the behaviour engine's per-incident latch (one REVIEW, one ALERT per incident), then pass through `AlertManager.process_behavior_events()` cooldowns as a safety net. Browsing evidence is capped below the review threshold, so never raise that cap without staged-footage evidence. Wording is 'for staff review', never theft or intent.
 6. **No Silent Changes**: Whenever schemas, thresholds, or dependencies change, update `PROJECT_STATUS.md` and `TECHNICAL_DECISIONS.md`.
 7. **Type Annotations**: Use Python type hints throughout all modules. Validate dataclasses or Pydantic models for configuration.
 8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer).

@@ -1,0 +1,30 @@
+# PharmaGuard demo configuration: laptop webcam facing a mock shelf.
+# Use with:  python main.py --local --config configs/demo_shelf.yaml
+#            !python main.py --colab --config configs/demo_shelf.yaml      (Colab)
+#
+# Zone coordinates are fractions of the camera image: x 0 = left edge, 1 = right; y 0 = top, 1 = bottom.
+# Take a webcam snapshot of the staged scene and outline the FRONT of the shelf where hands reach in.
+# (A drag-to-draw zone editor in the dashboard is planned for Priority 6.)
+
+zones:
+  - name: Mock_Shelf
+    polygon_normalized:
+      - [0.15, 0.10]
+      - [0.85, 0.10]
+      - [0.85, 0.55]
+      - [0.15, 0.55]
+    prolonged_presence_sec: 20.0
+
+behavior:
+  # Thresholds: REVIEW = visual warning only; ALERT = alarm (Priority 4).
+  review_threshold: 0.60
+  alert_threshold: 1.00
+  # Hand-to-pocket/bag only counts within this many seconds after the same hand left the shelf.
+  carry_window_sec: 3.0
+  # Size of the waist/pocket region around each hip (in torso lengths). Calibrate on staged clips:
+  # too large -> relaxed hands count as "pocket"; too small -> real pocketing missed.
+  pocket_radius_torso: 0.30
+
+objects:
+  enabled: true        # detect handbags/backpacks as concealment targets
+  frame_stride: 3

@@ -9,7 +9,7 @@ import numpy as np
 import cv2
 import pytest
 
-from pharmaguard.config import PharmaGuardConfig, ShelfZone
+from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.detector import DetectionResult
 from pharmaguard.pipeline import PharmaGuardPipeline, PipelineOutput
 from pharmaguard.behavior import BehaviorEventType
@@ -93,50 +93,63 @@ def test_multi_person_tracking_consistency():
     assert id_b in trk2.active_ids
 
 
-def test_shelf_monitoring_and_behavior_alerts():
-    """TEST 4, 5, 6: Verify zone entry, dwell accumulation, alert generation, and cooldown throttling."""
+class ScriptedPoseDetector:
+    """Stands in for YOLO-pose: replays a scripted skeleton sequence (tests/behavior_scenarios.py)."""
+
+    def __init__(self, frames, config):
+        self.frames, self.i, self.config = frames, 0, config.detector
+
+    def detect(self, frame):
+        _, kp, box = self.frames[min(self.i, len(self.frames) - 1)]
+        self.i += 1
+        if self.i > len(self.frames):
+            return DetectionResult()            # actor has left the view
+        return DetectionResult(xyxy=box[None], confidence=np.array([0.9], np.float32),
+                               class_id=np.zeros(1, np.int32), class_name=["person"], keypoints=kp[None])
+
+    def get_model_info(self):
+        return {"device": "cpu", "model_name": "scripted-pose", "has_keypoints": True}
+
+
+class FixedBagDetector:
+    def __init__(self, actor):
+        self.actor = actor
+
+    def detect(self, frame):
+        return DetectionResult(xyxy=self.actor.bag_box(320.0)[None], confidence=np.array([0.8], np.float32),
+                               class_id=np.array([26], np.int32), class_name=["handbag"])
+
+    def get_model_info(self):
+        return {"device": "cpu", "model_name": "fixed-bag"}
+
+
+def test_end_to_end_shelf_to_bag_sequence_raises_one_review_and_one_alert():
+    """Full pipeline (tracker -> behaviour -> alert manager -> event log) on a scripted shelf->bag->leave
+    sequence: exactly one REVIEW and one ALERT reach the operator, with reasons and score."""
+    from behavior_scenarios import Actor, FPS
+    actor = Actor(1, 320, [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None),
+                           (1.2, "bag_R", None), (2.0, "rest", None)], bag=True)
+    frames = actor.frames()
     config = PharmaGuardConfig()
-    config.zones = [
-        ShelfZone(
-            name="Prescription_Shelf_A",
-            polygon_normalized=[[0.10, 0.10], [0.50, 0.10], [0.50, 0.85], [0.10, 0.85]],
-            dwell_alert_threshold_sec=4.0,
-            rapid_retreat_threshold_sec=2.0
-        )
-    ]
-    pipeline = PharmaGuardPipeline(config)
+    config.objects.enabled = False
+    pipeline = PharmaGuardPipeline(config, detector=ScriptedPoseDetector(frames, config))
+    pipeline.object_detector = FixedBagDetector(actor)
+    blank = np.zeros((480, 640, 3), np.uint8)
 
-    # Frame 1: Person enters Prescription_Shelf_A (footprint inside [0.10, 0.10] - [0.50, 0.85])
-    # At 640x480, zone is roughly x: [64, 320], y: [48, 408]. Box [150, 200, 250, 380] has feet at (200, 380).
-    box_inside = np.array([[150.0, 200.0, 250.0, 380.0]], dtype=np.float32)
-    det_inside = DetectionResult(
-        xyxy=box_inside,
-        confidence=np.array([0.90], dtype=np.float32),
-        class_id=np.array([0], dtype=np.int32),
-        class_name=["person"]
-    )
-    pipeline.tracker.update(det_inside, timestamp=0.0)          # candidate
-    trk_res = pipeline.tracker.update(det_inside, timestamp=0.1)  # confirmed -> ID issued
-    events = pipeline.behavior_analyzer.analyze(trk_res, frame_width=640, frame_height=480)
-    assert any(e.event_type == BehaviorEventType.ZONE_ENTER for e in events)
+    alerts = []
+    n_frames = len(frames) + int(4.0 * FPS)            # actor leaves; tracker removes them after 2 s
+    for i in range(n_frames):
+        out = pipeline.process_frame(blank, timestamp=i / FPS)
+        alerts += out.metadata["new_alerts"]
 
-    # Advance dwell time artificially past threshold
-    tid = trk_res.active_ids[0]
-    pipeline.behavior_analyzer.zone_entry_times[(tid, "Prescription_Shelf_A")] = time.time() - 5.5
-
-    # Trigger second analysis cycle
-    events_dwell = pipeline.behavior_analyzer.analyze(trk_res, frame_width=640, frame_height=480)
-    assert any(e.event_type == BehaviorEventType.SUSPICIOUS_LOITERING for e in events_dwell)
-
-    # Alert generation
-    alerts = pipeline.alert_manager.process_behavior_events(events_dwell)
-    assert len(alerts) == 1
-    assert alerts[0].severity == "ALERT"
-    assert "PROLONGED DWELL" in alerts[0].title
-
-    # Repeat should be suppressed by cooldown
-    alerts_repeat = pipeline.alert_manager.process_behavior_events(events_dwell)
-    assert len(alerts_repeat) == 0
+    assert [a.severity for a in alerts] == ["WARNING", "ALERT"]
+    alert = alerts[1]
+    assert alert.score >= config.behavior.alert_threshold
+    assert alert.incident_id == alerts[0].incident_id
+    assert any("bag" in r for r in alert.reasons)
+    assert "review" in alert.title.lower()
+    timeline = [e.message for e in pipeline.event_manager.get_recent(50)]
+    assert any("reached into" in m for m in timeline)
 
 
 def test_annotated_video_and_hud_output():

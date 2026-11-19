@@ -57,7 +57,8 @@ def p(values: list[float], q: float) -> float:
 
 
 def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, video: str | None = None,
-                  imgsz: int | None = None, max_width: int | None = None, output_format: str | None = None) -> dict:
+                  imgsz: int | None = None, max_width: int | None = None, output_format: str | None = None,
+                  model: str | None = None, bags: bool = True) -> dict:
     import gradio as gr
 
     config = PharmaGuardConfig()
@@ -68,6 +69,9 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
         config.stream.max_process_width = max_width
     if output_format:
         config.stream.output_format = output_format
+    if model:
+        config.detector.model_name = model
+    config.objects.enabled = bags
 
     pipeline = PharmaGuardPipeline(config)
     encoder = gr.Image(type="numpy", format=config.stream.output_format)  # exactly what the UI uses
@@ -77,7 +81,7 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
     for f in frames[:5]:  # warm-up (CUDA kernels, allocator, encoder)
         encoder.postprocess(pipeline.process_frame(f).annotated_frame_rgb)
 
-    stages: dict[str, list[float]] = {k: [] for k in ("detect", "track", "behavior", "annotate", "pipeline", "encode", "total")}
+    stages: dict[str, list[float]] = {k: [] for k in ("detect", "objects", "track", "behavior", "annotate", "pipeline", "encode", "total")}
     detections: list[int] = []
     for f in frames[5:]:
         t0 = time.perf_counter()
@@ -88,6 +92,7 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
         st = out.metadata["stage_timings"]
         stages["detect"].append(st["detect_ms"])
         stages["track"].append(st["track_ms"])
+        stages["objects"].append(st.get("objects_ms", 0.0))
         stages["behavior"].append(st["behavior_ms"])
         stages["annotate"].append(st["annotate_ms"])
         stages["pipeline"].append((t1 - t0) * 1000)
@@ -105,6 +110,8 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
     print(f"Input -> processed: {width}x{height} -> {out.metadata['resolution']}  "
           f"(source: {'video ' + video if video else 'sample photo'})")
     print(f"Return encoding   : {config.stream.output_format}")
+    print(f"Bag detector      : {'every ' + str(config.objects.frame_stride) + ' frames' if config.objects.enabled else 'disabled'}"
+          f"  ('objects' row averages in the frames where it does not run)")
     print(f"Frames measured   : {n}   mean detections/frame: {statistics.mean(detections):.1f}")
     print("-" * 72)
     print(f"{'stage':<12}{'p50 ms':>10}{'p95 ms':>10}{'mean ms':>10}")
@@ -128,5 +135,8 @@ if __name__ == "__main__":
     ap.add_argument("--imgsz", type=int, default=None)
     ap.add_argument("--max-width", type=int, default=None)
     ap.add_argument("--format", dest="output_format", default=None, help="jpeg (default) | webp | png")
+    ap.add_argument("--model", default=None, help="Person model, e.g. yolov8n.pt (no hand analysis)")
+    ap.add_argument("--no-bags", action="store_true", help="Disable the bag detector")
     a = ap.parse_args()
-    run_benchmark(a.frames, a.width, a.height, a.video, a.imgsz, a.max_width, a.output_format)
+    run_benchmark(a.frames, a.width, a.height, a.video, a.imgsz, a.max_width, a.output_format,
+                  model=a.model, bags=not a.no_bags)
