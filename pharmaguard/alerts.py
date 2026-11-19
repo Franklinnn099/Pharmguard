@@ -138,6 +138,16 @@ class AlertManager:
             # Non-fatal for the live stream, but must never be silent: it means evidence is being lost.
             logger.warning("Failed to persist alert %s to %s: %s", alert.alert_id, self.config.alert_log_file, exc)
 
+    def persist_record(self, record: Dict) -> None:
+        """Append a non-alert audit record (e.g. alarm acknowledgement) to the same JSONL log."""
+        if not self.config.alert_log_file:
+            return
+        try:
+            with open(self.config.alert_log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps({"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), **record}) + "\n")
+        except OSError as exc:
+            logger.warning("Failed to persist audit record %s: %s", record.get("record"), exc)
+
     def get_recent_alerts(self, limit: int = 15) -> List[SecurityAlert]:
         """Return the most recent alerts for UI presentation."""
         return self.alert_history[:limit]

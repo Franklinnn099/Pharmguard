@@ -234,3 +234,41 @@ behaviour -> AlertManager) produces exactly `[WARNING, ALERT]`.
   3 s after a shelf contact by the same hand, but it is the weakest signal and `pocket_radius_torso` needs calibration.
 - The system cannot see products. It infers from hand trajectories, so palming without visible arm motion is missed.
 - Camera geometry matters: the reaching arm must be visible (camera ~45 degrees to the side).
+
+---
+
+## 8. Alarm System (2026-11-19)
+
+### State machine (`pharmaguard/alarm.py`, server-side, shared by all dashboards)
+`IDLE -> ACTIVE (sounding) -> ACKNOWLEDGED -> IDLE` via ALERT / Acknowledge / Reset, plus `TEST` for the manual check.
+- **Only ALERT sounds.** REVIEW (WARNING) shows an amber, visual-only banner for 20 s.
+- **Duplicate prevention, three layers:** (1) the behaviour engine latches one ALERT per incident; (2) AlertManager cooldown
+  (frame time); (3) AlarmController keys on `(tracker_id, incident_id)`, so an incident can sound **once, ever**, even after reset.
+  A *new* incident during an alarm joins the active list and restarts the siren so the operator hears it.
+- **Acknowledge** silences the alarm and records the operator (Gradio auth username) and time. Alerts stay on screen until **Reset**.
+  Reset of an unacknowledged alarm is recorded as such.
+- **Auto-silence** after 60 s if unacknowledged; the banner stays (state remains ACTIVE, marked "timeout").
+- **Test alarm** sounds a distinct tone for 5 s and is never recorded as a security alert. It is refused while a real alarm is active
+  (a test must never mask a real alarm), and a real alarm arriving during a test takes over.
+- Every transition (raised / acknowledged / reset / test) goes to the event timeline and is appended to the audit JSONL.
+
+### Audio delivery
+- The siren is synthesised in the browser with the Web Audio API (no audio asset, no extra transfer).
+- The server renders state into `<div id="pg-alarm" data-sounding data-seq data-kind data-volume>`; a page script polls it
+  every 250 ms. A dedicated 0.5 s `gr.Timer` refreshes only this banner (skipped when unchanged), so the alarm reaches the
+  browser within about 0.5-0.75 s plus network.
+- **Browser autoplay policy:** audio is blocked until the user interacts with the page. The page shows
+  "Alarm sound: LOCKED ... click anywhere" until the first click/keypress (starting the webcam counts), then "ready".
+  The alarm never fails silently without saying so.
+- The annotated video frame also gets a flashing red border and an "ALARM - REVIEW NOW" label (drawn after the HUD),
+  so the alarm is visible even when the panel is scrolled away or the sound is muted.
+
+### Verified
+- 16 tests (`tests/test_alarm.py`): sounding rules, once-per-incident, ack/reset/auto-silence, test-mode rules,
+  banner escaping, handlers, and a full pipeline run (scripted shelf->bag->leave) that sounds exactly once, shows the REVIEW
+  banner first, draws the border, and persists the acknowledgement.
+- **Real browser (Chrome, 2026-11-19, local server):** the banner keeps its `id`/`data-*` attributes after Gradio rendering; the
+  script reports the AudioContext "suspended" before interaction and "running" after the click on *Test alarm*; the siren
+  played (`playing: true`) while state was TEST and stopped when the server returned to IDLE after 5 s; the action was
+  written to the audit log. The real-ALERT browser path uses the same code with `kind=ALERT` (covered by unit tests,
+  not separately clicked through).

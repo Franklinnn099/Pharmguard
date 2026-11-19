@@ -70,7 +70,15 @@ The report lists the IDs issued and every REVIEW/ALERT with its reasons. Fill in
 - **Small items palmed without visible arm movement** are missed: the system tracks hands, not products.
 - Bags are COCO "handbag/backpack/suitcase". Unusual bags or bags held low and out of frame may not be detected; then only the weaker pocket path applies.
 
-## 5. Fallback demonstration
+## 5. Alarm checks before presenting
+
+1. Open the dashboard and **click anywhere once**: the line under the banner must say `Alarm sound: ready`. Browsers block sound until the page is clicked.
+2. Press **Test alarm**: a two-tone siren plays for 5 s with a purple banner and a purple flashing border on the video.
+3. Set the laptop volume to an audible level and unmute the browser tab.
+4. During a staged concealment: an amber REVIEW banner appears at the transfer, then a red ALARM with siren when the actor leaves.
+   Press **Acknowledge** (siren stops, banner shows who acknowledged), then **Reset** when resolved.
+
+## 6. Fallback demonstration
 
 If the Colab link fails on the day, play the annotated output of the staged clips produced by
 `tools/track_video.py --out ...`. It is the same pipeline on recorded footage with identical results.

@@ -18,6 +18,7 @@ import numpy as np
 from pharmaguard.pipeline import PharmaGuardPipeline, PipelineOutput
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.telemetry import TelemetrySnapshot
+from pharmaguard.alarm import AlarmSnapshot
 
 
 # Custom styling for professional pharmacy security console
@@ -99,6 +100,63 @@ CLIENT_FPS_HEAD = """
 </script>
 """
 
+# Browser alarm siren (Web Audio API, no audio file). The server renders alarm state into
+# <div id="pg-alarm" data-sounding data-seq data-kind data-volume>; this script polls it every 250 ms.
+# Browsers block audio until the user interacts with the page, so the status line says so explicitly.
+ALARM_HEAD = """
+<script>
+(() => {
+  let ctx = null, osc = null, gain = null, timer = null, lastSeq = -1, playing = false;
+  const ensureCtx = () => {
+    if (!ctx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) ctx = new AC(); }
+    return ctx;
+  };
+  const unlock = () => { const c = ensureCtx(); if (c && c.state === 'suspended') c.resume(); };
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, unlock, {capture: true}));
+  const status = () => {
+    const el = document.getElementById('pg-sound-status');
+    if (!el) return;
+    const ok = ctx && ctx.state === 'running';
+    el.textContent = ok ? 'Alarm sound: ready' : 'Alarm sound: LOCKED by the browser - click anywhere on this page once to enable';
+    el.style.color = ok ? '#34d399' : '#f87171';
+  };
+  const stop = () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+    try { if (osc) osc.stop(); } catch (e) {}
+    osc = null;
+    if (gain) gain.disconnect();
+    gain = null;
+    playing = false;
+  };
+  const start = (kind, vol) => {
+    const c = ensureCtx(); if (!c) return;
+    stop();
+    gain = c.createGain(); gain.gain.value = vol; gain.connect(c.destination);
+    osc = c.createOscillator(); osc.type = 'square'; osc.connect(gain); osc.start();
+    const hiF = kind === 'TEST' ? 660 : 960, loF = kind === 'TEST' ? 520 : 640;
+    let hi = true; osc.frequency.value = hiF;
+    timer = setInterval(() => { hi = !hi; if (osc) osc.frequency.setValueAtTime(hi ? hiF : loF, c.currentTime); },
+                        kind === 'TEST' ? 300 : 400);
+    playing = true;
+  };
+  ensureCtx();
+  setInterval(() => {
+    status();
+    const el = document.getElementById('pg-alarm');
+    if (!el) return;
+    const sounding = el.dataset.sounding === '1';
+    const seq = parseInt(el.dataset.seq || '0', 10);
+    if (sounding && (seq !== lastSeq || !playing)) { start(el.dataset.kind || 'ALERT', parseFloat(el.dataset.volume || '0.25')); lastSeq = seq; }
+    else if (!sounding && playing) { stop(); }
+    window.__pgAlarm = {playing, seq: lastSeq, ctxState: ctx ? ctx.state : 'unsupported'};  // automated checks
+  }, 250);
+})();
+</script>
+"""
+
+DASHBOARD_HEAD = CLIENT_FPS_HEAD + ALARM_HEAD
+
 SIGNAL_LABELS = {
     "LIVE": "LIVE",
     "NO_SIGNAL": "NO SIGNAL - camera stopped or connection lost",
@@ -169,6 +227,55 @@ def format_telemetry(tele: TelemetrySnapshot, last: Optional[PipelineOutput], de
     }
 
 
+def format_alarm_html(snap: AlarmSnapshot, volume: float = 0.25) -> str:
+    """Alarm banner. The data-* attributes drive the browser siren (ALARM_HEAD)."""
+    attrs = (f"id='pg-alarm' data-sounding='{1 if snap.sounding else 0}' data-seq='{snap.sound_seq}' "
+             f"data-kind='{escape(snap.kind)}' data-state='{escape(snap.state)}' data-volume='{volume:.2f}'")
+
+    def box(bg: str, border: str, inner: str) -> str:
+        return (f"<div {attrs} style='background:{bg};border:2px solid {border};border-radius:8px;"
+                f"padding:10px 14px;margin:4px 0;'>{inner}</div>")
+
+    def alert_lines(alerts: list) -> str:
+        rows = []
+        for a in alerts[-3:]:
+            reasons = "".join(f"<li>{escape(r)}</li>" for r in a.reasons[:4])
+            rows.append(
+                f"<div style='margin-top:6px;color:#fee2e2;font-size:13px;'><b>Person #{a.tracker_id}</b> at "
+                f"{escape(a.zone_name)} - {escape(a.timestamp_iso)} - score {a.score:.2f} - incident {a.incident_id}"
+                f"<ul style='margin:2px 0 0 18px;font-size:12px;color:#fecaca;'>{reasons}</ul></div>")
+        return "".join(rows)
+
+    if snap.state == "ACTIVE":
+        silenced = (" <span style='font-size:12px;color:#fca5a5;'>(sound auto-stopped after timeout - still "
+                    "unacknowledged)</span>") if snap.silenced_reason == "timeout" else ""
+        return box("rgba(220,38,38,0.25)", "#ef4444",
+                   f"<div style='font-size:18px;font-weight:800;color:#fecaca;'>ALARM - suspicious interaction "
+                   f"sequence, review now ({len(snap.active_alerts)} active){silenced}</div>"
+                   f"<div style='font-size:12px;color:#fca5a5;'>Raised {escape(snap.raised_at_iso)}. "
+                   f"Press <b>Acknowledge</b> to silence, <b>Reset</b> when resolved. "
+                   f"This flags behaviour for review; it does not establish theft.</div>"
+                   + alert_lines(snap.active_alerts))
+    if snap.state == "ACKNOWLEDGED":
+        return box("rgba(127,29,29,0.25)", "#991b1b",
+                   f"<div style='font-size:15px;font-weight:700;color:#fecaca;'>Alarm acknowledged by "
+                   f"{escape(snap.acknowledged_by)} at {escape(snap.acknowledged_at_iso)} - press Reset when "
+                   f"resolved</div>" + alert_lines(snap.active_alerts))
+    if snap.state == "TEST":
+        return box("rgba(168,85,247,0.2)", "#a855f7",
+                   "<div style='font-size:16px;font-weight:700;color:#e9d5ff;'>ALARM TEST - checking sound and "
+                   "display (not a security event)</div>")
+    if snap.latest_review is not None:
+        r = snap.latest_review
+        return box("rgba(245,158,11,0.15)", "#f59e0b",
+                   f"<div style='font-size:14px;font-weight:700;color:#fde68a;'>Review suggested: person "
+                   f"#{r.tracker_id} at {escape(r.zone_name)} ({escape(r.timestamp_iso[-8:])}, score "
+                   f"{r.score:.2f}) - visual only, no alarm</div>"
+                   f"<div style='font-size:12px;color:#fcd34d;'>{escape('; '.join(r.reasons[:3]))}</div>")
+    return box("rgba(16,185,129,0.08)", "#065f46",
+               "<div style='font-size:14px;color:#6ee7b7;'>Monitoring - no active alarm</div>")
+
+
 def create_pharmaguard_ui(
     pipeline: PharmaGuardPipeline,
     config: Optional[PharmaGuardConfig] = None
@@ -197,6 +304,31 @@ def create_pharmaguard_ui(
         out_events = gr.skip() if cache.get("events") == events_html else events_html
         cache["alerts"], cache["events"] = alerts_html, events_html
         return (t["status"], t["tracked"], t["ids"], t["fps"], t["latency"], out_alerts, out_events, cache)
+
+    alarm_volume = cfg.alarm.volume
+
+    def _operator(request: Optional[gr.Request]) -> str:
+        return (getattr(request, "username", None) or "operator") if request is not None else "operator"
+
+    def refresh_alarm(last_html: str):
+        html = format_alarm_html(pipeline.alarm.snapshot(), alarm_volume)
+        return (gr.skip(), last_html) if html == last_html else (html, html)
+
+    def on_acknowledge(request: gr.Request = None):
+        pipeline.alarm.acknowledge(_operator(request))
+        html = format_alarm_html(pipeline.alarm.snapshot(), alarm_volume)
+        return html, html
+
+    def on_alarm_reset(request: gr.Request = None):
+        pipeline.alarm.reset(_operator(request))
+        html = format_alarm_html(pipeline.alarm.snapshot(), alarm_volume)
+        return html, html
+
+    def on_alarm_test(request: gr.Request = None):
+        if not pipeline.alarm.test(_operator(request)):
+            gr.Warning("A real alarm is active - acknowledge/reset it before testing.")
+        html = format_alarm_html(pipeline.alarm.snapshot(), alarm_volume)
+        return html, html
 
     def on_reset_click():
         pipeline.reset_state()
@@ -245,6 +377,18 @@ def create_pharmaguard_ui(
                     <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {escape(str(model_info.get('model_name')))} + ByteTrack (Kalman)</div>
                 </div>
                 """)
+
+        # Alarm strip: banner + operator controls (always visible, above the video).
+        alarm_cache = gr.State("")
+        with gr.Row():
+            with gr.Column(scale=9):
+                alarm_box = gr.HTML(value=format_alarm_html(pipeline.alarm.snapshot(), alarm_volume))
+                gr.HTML("<div id='pg-sound-status' style='font-size:12px;color:#f87171;'>"
+                        "Alarm sound: waiting for page script...</div>")
+            with gr.Column(scale=3, min_width=220):
+                ack_btn = gr.Button("Acknowledge alarm (silence)", variant="stop", size="sm")
+                alarm_reset_btn = gr.Button("Reset alarms (resolved)", variant="secondary", size="sm")
+                test_btn = gr.Button("Test alarm", variant="secondary", size="sm")
 
         # Main surveillance view
         with gr.Row():
@@ -352,6 +496,14 @@ def create_pharmaguard_ui(
             concurrency_id="frame_pipeline",
             api_name="process_frame",
         )
+
+        # Alarm: fast poll with a tiny payload (skipped when unchanged), plus immediate button feedback.
+        alarm_outputs = [alarm_box, alarm_cache]
+        ack_btn.click(fn=on_acknowledge, inputs=None, outputs=alarm_outputs, api_name="alarm_acknowledge")
+        alarm_reset_btn.click(fn=on_alarm_reset, inputs=None, outputs=alarm_outputs, api_name="alarm_reset")
+        test_btn.click(fn=on_alarm_test, inputs=None, outputs=alarm_outputs, api_name="alarm_test")
+        alarm_timer = gr.Timer(cfg.alarm.poll_interval_sec)
+        alarm_timer.tick(fn=refresh_alarm, inputs=[alarm_cache], outputs=alarm_outputs, show_progress="hidden")
 
         # Panels: 1 Hz, off the per-frame path.
         timer = gr.Timer(1.0)

@@ -39,6 +39,7 @@ pharmguard/
 │   ├── interaction.py              # Per-frame hand geometry: wrist in shelf / pocket / bag (stateless)
 │   ├── behavior.py                 # Temporal sequences, decaying suspicion score, incident latching
 │   ├── alerts.py                   # AlertManager (throttling, severity grading, JSONL logging)
+│   ├── alarm.py                    # AlarmController: sound once per incident, ack/reset/test, audit
 │   ├── events.py                   # EventManager (chronological ring buffer)
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
 │   ├── pipeline.py                 # Per-frame orchestration, downscale, stage timings
@@ -58,6 +59,7 @@ pharmguard/
     ├── test_behavior.py            # Mandate §6 scenarios on scripted skeletons (false-alert & miss checks)
     ├── behavior_scenarios.py       # Skeleton actor scripts for behaviour tests
     ├── test_alerts.py              # Cooldown throttling & persistence tests
+    ├── test_alarm.py               # Alarm state machine, dedupe, ack/reset/test, pipeline integration
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip

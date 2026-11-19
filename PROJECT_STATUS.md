@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-19 (Priorities 1-2 merged to `main`; Priority 3 on branch `p3-behaviour-engine`)
+**Last updated**: 2026-11-19 (Priorities 1-3 merged to `main`; Priority 4 on branch `p4-alarm-system`)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 81 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+**Test suite**: 97 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -27,6 +27,8 @@
 | Behaviour engine, mandate §6 scenarios (scripted skeletons): walk past / browse / pick up & return / own-bag reach / slow transfer / hidden hands give **no** review or alert; shelf→bag→leave gives **one REVIEW + one ALERT**; shelf→pocket→leave gives **REVIEW only**; only the concealer is flagged when 2 people are present | `tests/test_behavior.py` (18 tests) |
 | One alert per incident; new incident after decay alerts again | `test_one_incident_one_alert_then_new_incident_after_decay` |
 | Full pipeline (tracker → behaviour → alerts → timeline) emits exactly `[WARNING, ALERT]` for shelf→bag→leave | `test_end_to_end_shelf_to_bag_sequence_raises_one_review_and_one_alert` |
+| Alarm: sounds only on ALERT, once per incident (even after reset); REVIEW visual only; acknowledge (operator recorded) / reset / 60 s auto-silence; test alarm (5 s, refused during a real alarm, never a security record) | `tests/test_alarm.py` (16 tests) |
+| Alarm in a real browser: banner state reaches the page; audio locked until first click (shown on screen); Test alarm siren played and stopped after 5 s; action audit-logged | Chrome on local server, 2026-11-19 (TECHNICAL_DECISIONS §8) |
 | Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
 | Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
 
@@ -71,13 +73,14 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 | P3-2 | A relaxed hand at the hip registers as "pocket" on real imagery (harmless unless within 3 s after a shelf contact by the same hand); `pocket_radius_torso` uncalibrated | Calibrate on staged clips |
 | P3-3 | CPU only: pose + bag detection caps compute at ~6.9 FPS (11.6 FPS without bags). GPU unmeasured | Colab run |
 | R8 | One pipeline is shared by all sessions; two simultaneous streams corrupt tracker state | Before demo: single-operator lock |
-| — | No audible alarm, acknowledgement, event database, evidence clips, or zone editor (zones via `configs/demo_shelf.yaml`) | Priorities 4–6 |
+| — | No event database or evidence clips; no zone editor (zones via `configs/demo_shelf.yaml`) | Priorities 5–6 |
+| P4-1 | Real-ALERT siren path verified by unit tests and the shared code path; only the TEST path was clicked through in a browser | Check during staged run (DEMO_STAGING §5) |
 
 ## 5. Next priorities
 
-1. **Owner:** live Colab run (Section 3), then record the staged scenarios in `docs/DEMO_STAGING.md` and run `tools/track_video.py` on each. Record false alerts and misses here.
-2. **Priority 4 — alarm system:** audible browser alarm on ALERT only, visual banner, acknowledge/reset (operator), manual alarm test button. Duplicate prevention already comes from the per-incident latch.
-3. **Priority 5 — event recording:** SQLite on Drive (event id, timestamp, camera id, track id, category, score, reasons), plus a pre/post-event evidence clip ring buffer.
+1. **Owner:** live Colab run (Section 3), then the staged scenarios in `docs/DEMO_STAGING.md` (including the alarm checks in §5). Record false alerts and misses here.
+2. **Priority 5 — event recording:** SQLite event store on Drive (event id, timestamp, camera id, track id, category, score, reasons, ack info) and a pre/post-event evidence clip ring buffer.
+3. **Priority 6 — dashboard:** event review (list + details + clip playback) and a zone editor.
 
 ## 6. How to run
 

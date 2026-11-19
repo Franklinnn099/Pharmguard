@@ -15,7 +15,7 @@ os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.pipeline import PharmaGuardPipeline
-from pharmaguard.ui import create_pharmaguard_ui, CLIENT_FPS_HEAD
+from pharmaguard.ui import create_pharmaguard_ui, DASHBOARD_HEAD
 
 
 def resolve_auth_credentials(args):
@@ -144,7 +144,7 @@ def main():
         share=share_mode,
         auth=auth_config,
         show_error=True,
-        head=CLIENT_FPS_HEAD,
+        head=DASHBOARD_HEAD,
     )
 
 

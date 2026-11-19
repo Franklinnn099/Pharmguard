@@ -146,6 +146,30 @@ class SecurityAnnotator:
             cv2.putText(frame, f"ID #{tid} (occluded)", (x1 + 4, max(14, y1 + 14)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, lineType=cv2.LINE_AA)
 
+    def draw_alarm_border(self, frame: np.ndarray, alarm, frame_index: int) -> np.ndarray:
+        """Flashing border in the video itself so the alarm is visible even if the panel is off-screen."""
+        state = getattr(alarm, "state", "IDLE")
+        if state == "ACTIVE":
+            color, flash = (0, 0, 255), True
+        elif state == "ACKNOWLEDGED":
+            color, flash = (0, 0, 160), False
+        elif state == "TEST":
+            color, flash = (220, 60, 200), True
+        else:
+            return frame
+        if flash and frame_index % 2:
+            return frame
+        h, w = frame.shape[:2]
+        t = max(6, w // 80)
+        cv2.rectangle(frame, (0, 0), (w - 1, h - 1), color, t)
+        label = {"ACTIVE": "ALARM - REVIEW NOW", "ACKNOWLEDGED": "ALARM ACKNOWLEDGED",
+                 "TEST": "ALARM TEST"}[state]
+        size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+        x, y = (w - size[0]) // 2, h - 14
+        cv2.rectangle(frame, (x - 8, y - size[1] - 8), (x + size[0] + 8, y + 6), color, -1)
+        cv2.putText(frame, label, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+        return frame
+
     def draw_hud(
         self,
         frame: np.ndarray,

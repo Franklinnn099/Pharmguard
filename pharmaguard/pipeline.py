@@ -18,6 +18,7 @@ from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult
 from pharmaguard.tracker import ByteTrackerWrapper, TrackingResult, TrackedPerson
 from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
 from pharmaguard.alerts import AlertManager, SecurityAlert
+from pharmaguard.alarm import AlarmController
 from pharmaguard.events import EventManager, SystemEvent
 from pharmaguard.annotator import SecurityAnnotator
 from pharmaguard.telemetry import StreamTelemetry, TelemetrySnapshot
@@ -83,6 +84,7 @@ class PharmaGuardPipeline:
         self.bag_boxes: List[np.ndarray] = []
         self.alert_manager = AlertManager(self.config.alert)
         self.event_manager = EventManager()
+        self.alarm = AlarmController(self.config.alarm, on_action=self._on_alarm_action)
         self.annotator = SecurityAnnotator(self.config.display)
 
         # Performance & Timing Metrics
@@ -177,8 +179,10 @@ class PharmaGuardPipeline:
         t_beh_end = time.perf_counter()
         behavior_ms = (t_beh_end - t_beh_start) * 1000.0
 
-        # 4. Alert Management
+        # 4. Alert Management -> operator alarm (ALERT sounds once per incident; WARNING is visual only)
         new_alerts = self.alert_manager.process_behavior_events(behavior_events)
+        if new_alerts:
+            self.alarm.on_alerts(new_alerts)
 
         # Log new events to event timeline
         for b_evt in behavior_events:
@@ -212,6 +216,8 @@ class PharmaGuardPipeline:
             alert_count=len(self.alert_manager.alert_history),
             connection_status="LIVE"
         )
+        # Alarm border last, so nothing (HUD bar) paints over it.
+        annotated_bgr = self.annotator.draw_alarm_border(annotated_bgr, self.alarm.snapshot(), self.frame_counter)
         t_ann_end = time.perf_counter()
         annotate_ms = (t_ann_end - t_ann_start) * 1000.0
 
@@ -259,6 +265,20 @@ class PharmaGuardPipeline:
         self.last_output = output
         return output
 
+    def _on_alarm_action(self, action: str, details: Dict[str, Any]) -> None:
+        """Audit every alarm transition: timeline + persistent log (who acknowledged what, when)."""
+        operator = details.get("operator")
+        msg = {
+            "ALARM_RAISED": f"ALARM sounded for person #{details.get('tracker_id')} "
+                            f"(incident {details.get('incident_id')}, score {details.get('score', 0):.2f})",
+            "ALARM_ACKNOWLEDGED": f"Alarm acknowledged by {operator} ({len(details.get('alert_ids', []))} alert(s))",
+            "ALARM_RESET": f"Alarms reset by {operator}; monitoring resumed",
+            "ALARM_TEST": f"Manual alarm test started by {operator}",
+        }.get(action, action)
+        self.event_manager.log(category="ALARM", message=msg, metadata=dict(details))
+        if action != "ALARM_RAISED":  # raised alarms are already persisted as the alert record itself
+            self.alert_manager.persist_record({"record": action, **details})
+
     def telemetry_snapshot(self) -> TelemetrySnapshot:
         """Thread-safe read of stream health for the dashboard poller."""
         return self.telemetry.snapshot()
@@ -287,6 +307,7 @@ class PharmaGuardPipeline:
             self.behavior_analyzer.reset()
             self.bag_boxes = []
             self.alert_manager.clear()
+            self.alarm.reset(operator="system (tracking reset)")
             self.event_manager.clear()
             self.telemetry.reset()
             self.last_output = None

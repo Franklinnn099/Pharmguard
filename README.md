@@ -43,6 +43,7 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 - **Configurable Shelf Zones**: Resolution-independent normalized 2D polygons representing monitored pharmacy shelves (e.g. narcotics or restricted medicine racks).
 - **Hand-Based Interaction Analysis**: YOLOv8-pose wrist keypoints detect hands reaching into a configured shelf zone, then moving to the person's waist/pocket region or a detected bag within seconds.
 - **Suspicion Scoring for Staff Review**: decaying, weighted evidence; browsing alone can never alert; REVIEW (visual) and ALERT (alarm) fire once per incident with human-readable reasons. The system flags interactions for review and does not determine theft or intent.
+- **Operator Alarm**: browser siren on ALERT only (once per incident), visual banner and flashing frame border, Acknowledge / Reset with operator audit trail, and a manual Test alarm button. REVIEW warnings are visual only.
 - **Alert Management & Throttling**: Cooldown suppression prevents alert storms while recording alerts to structured audit logs (`pharmaguard_alerts.jsonl`).
 - **Professional Security Dashboard**: High-contrast dark surveillance console built with Gradio displaying live FPS, latency, tracked count, active IDs, real-time alert feed, and zone configuration sliders.
 

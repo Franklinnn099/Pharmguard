@@ -176,6 +176,19 @@ class AlertConfig(BaseModel):
     )
 
 
+class AlarmConfig(BaseModel):
+    """Operator alarm behaviour. Only ALERT-level events sound; REVIEW is visual only."""
+    sound_enabled: bool = True
+    max_sound_sec: float = Field(default=60.0, gt=0.0,
+        description="Unacknowledged alarms stop sounding after this long; the banner stays until reset.")
+    test_duration_sec: float = Field(default=5.0, gt=0.0, description="Length of the manual test alarm.")
+    review_banner_sec: float = Field(default=20.0, ge=0.0,
+        description="How long a REVIEW (warning) stays in the banner when no alarm is active.")
+    poll_interval_sec: float = Field(default=0.5, gt=0.0,
+        description="Dashboard alarm refresh period (alarm reaches the browser within ~this + network).")
+    volume: float = Field(default=0.25, ge=0.0, le=1.0, description="Browser siren gain.")
+
+
 class StreamConfig(BaseModel):
     """Browser <-> server video transport settings (the real-time critical path)."""
     capture_width: int = Field(default=640, description="Ideal webcam capture width requested from the browser.")
@@ -225,6 +238,7 @@ class PharmaGuardConfig(BaseModel):
     alert: AlertConfig = Field(default_factory=AlertConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     stream: StreamConfig = Field(default_factory=StreamConfig)
+    alarm: AlarmConfig = Field(default_factory=AlarmConfig)
 
     @classmethod
     def load_from_yaml(cls, path: str) -> "PharmaGuardConfig":
