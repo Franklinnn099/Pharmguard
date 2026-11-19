@@ -323,3 +323,37 @@ expected frame count via both the ffmpeg and OpenCV paths; the clip window inclu
 buffer is bounded and rate-capped; flush finalises partial clips; a crashing encoder is reported and the worker survives.
 In the full pipeline, scripted shelf->bag->leave produces 2 events (REVIEW and ALERT) with camera/track/incident/score/reasons,
 2 playable clips (>50 frames), acknowledgement recorded, audit rows, and the DB and clips mirrored.
+
+---
+
+## 10. Dashboard: Live Monitor / Event Review / Zones (2026-11-19)
+
+### Layout
+Header and **alarm strip** (banner + Acknowledge / Reset / Test) sit above the tabs, so an alarm is visible from every tab.
+- **Live monitor**: camera input, annotated output, stream status, people count, active IDs, delivered/displayed FPS, latency
+  breakdown, recent alerts, event timeline, detection/alert thresholds.
+- **Event review** (`pharmaguard/ui_review.py`): filterable event table (severity, review status); details (all recorded fields,
+  reasons, acknowledgement, staff verdict, non-accusatory framing); evidence clip player; verdict
+  (confirmed / false alarm / dismissed / re-open) + note, saved with the operator name and audited.
+  The **false-alarm rate is computed only from staff verdicts** (confirmed vs false alarm, "dismissed" excluded), shown as
+  "not measured yet" until something is reviewed. That figure is meant for the Dec 1 report.
+- **Zones** (`pharmaguard/ui_zones.py`): capture a snapshot of the live (un-annotated) frame, click polygon corners, name the
+  zone, Add (working copy) → **Apply** (live, under the pipeline lock, takes effect next frame, audited) → **Save**. Applying an
+  empty zone list is refused (monitoring would silently stop).
+
+### Security decisions
+- **Zone saves are confined to `configs/*.yaml`.** The dashboard may be reachable through a public share link, so a
+  browser-supplied path is reduced to its file name and must end in `.yaml`. Traversal (`../`, `..\\`, absolute paths) cannot
+  write outside `configs/`.
+- **Clip serving**: Gradio only serves files from the cwd, temp, or `allowed_paths`. Clips live in the data dir (on Colab
+  `/content/pg_data`, outside the repo), so `app.py` passes exactly that directory as `allowed_paths`, and nothing else.
+- All event/alert text rendered as HTML is escaped (tested with `<script>` in reasons/zone names).
+
+### Verified
+- 19 tests (`tests/test_dashboard.py`): zone validation (name, duplicates, <3 points, collinear), normalisation, preview,
+  path confinement, YAML save preserving other settings, live `set_zones` effect on the next frame, review table filters, the
+  false-alarm-rate maths, escaping, and the review/zone handlers end to end on a pipeline that recorded real events + clips.
+- **Real browser (Chrome, 2026-11-19, local server with seeded events):** the review table loaded on tab open; selecting a row
+  showed full details; the **evidence clip played** (H.264 via ffmpeg, 10.1 s, 640x480, `readyState 4`, no media error); a
+  verdict saved through the UI updated the table and the rate and was persisted with its audit row in SQLite; clicks on the zone
+  image registered as numbered corners (`select` works on a non-interactive image in Gradio 6).

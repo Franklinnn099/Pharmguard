@@ -135,7 +135,7 @@ def main():
 
     # 3. Build UI & Configure Queue for High-Speed Streaming
     print(f"[PharmaGuard] Building Gradio Security Operations Dashboard...")
-    demo = create_pharmaguard_ui(pipeline=pipeline, config=config)
+    demo = create_pharmaguard_ui(pipeline=pipeline, config=config, config_path=args.config)
 
     # Queue is required for streaming; the stream event itself is limited to 1 concurrent frame.
     demo.queue(default_concurrency_limit=2)
@@ -163,6 +163,9 @@ def main():
         auth=auth_config,
         show_error=True,
         head=DASHBOARD_HEAD,
+        # Evidence clips live in the data dir (e.g. /content/pg_data on Colab, outside the repo):
+        # Gradio only serves files from explicitly allowed paths.
+        allowed_paths=[os.path.abspath(config.recording.data_dir)] if config.recording.enabled else None,
     )
 
 

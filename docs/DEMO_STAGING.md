@@ -28,9 +28,9 @@ The system judges shelf interaction by **wrist keypoints** (YOLOv8-pose). Wrists
 
 ## 2. Zone setup
 
-1. Start the app and take a screenshot of the annotated output with the empty scene.
-2. Measure the shelf front as fractions of the image width/height.
-3. Edit `configs/demo_shelf.yaml` → `zones[0].polygon_normalized`, and restart with `--config configs/demo_shelf.yaml`.
+1. Start the webcam on **Live monitor**, then open the **Zones** tab and press **Capture snapshot from camera**.
+2. Click the corners of the shelf front in order, name the zone, press **Add zone**, then **Apply to live system**.
+3. Press **Save to file** (saves into `configs/demo_shelf.yaml`) so it survives a restart (`--config configs/demo_shelf.yaml`).
 4. Check: when the actor's hand reaches into the shelf, the zone badge shows **HAND CONTACT** and the wrist dot turns **orange**.
 
 Wrist dots: green = free, orange = in shelf, magenta = at pocket/bag. Person box: blue = normal, amber = REVIEW, red = ALERT.
@@ -61,6 +61,8 @@ The report lists the IDs issued and every REVIEW/ALERT with its reasons. Fill in
 
 **Acceptance:** scenarios 1-6, 8 and 9 produce **zero** REVIEW/ALERT events; 7a produces exactly one ALERT;
 7b produces exactly one REVIEW. Record false alerts (alerts in 1-6) and misses (no alert in 7a) in PROJECT_STATUS.md.
+
+In the **Event review** tab, mark every recorded event **Confirmed** or **False alarm** after each run: the tab then shows the measured false-alarm rate to quote in the presentation.
 
 ## 4. Known false-positive and miss modes (state them honestly if asked)
 

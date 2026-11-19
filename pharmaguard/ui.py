@@ -19,6 +19,8 @@ from pharmaguard.pipeline import PharmaGuardPipeline, PipelineOutput
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.telemetry import TelemetrySnapshot
 from pharmaguard.alarm import AlarmSnapshot
+from pharmaguard.ui_review import build_review_tab
+from pharmaguard.ui_zones import build_zones_tab
 
 
 # Custom styling for professional pharmacy security console
@@ -278,7 +280,8 @@ def format_alarm_html(snap: AlarmSnapshot, volume: float = 0.25) -> str:
 
 def create_pharmaguard_ui(
     pipeline: PharmaGuardPipeline,
-    config: Optional[PharmaGuardConfig] = None
+    config: Optional[PharmaGuardConfig] = None,
+    config_path: Optional[str] = None,
 ) -> gr.Blocks:
     """Construct the Gradio dashboard interface."""
     cfg = config or pipeline.config
@@ -390,76 +393,85 @@ def create_pharmaguard_ui(
                 alarm_reset_btn = gr.Button("Reset alarms (resolved)", variant="secondary", size="sm")
                 test_btn = gr.Button("Test alarm", variant="secondary", size="sm")
 
-        # Main surveillance view
-        with gr.Row():
-            # Left column: Video streams
-            with gr.Column(scale=7):
+        with gr.Tabs():
+            with gr.Tab("Live monitor"):
+                # Main surveillance view
                 with gr.Row():
-                    webcam_input = gr.Image(
-                        sources=["webcam"],
-                        streaming=True,
-                        label="1. Camera input (click to start webcam)",
-                        type="numpy",
-                        webcam_options=gr.WebcamOptions(
-                            mirror=False,
-                            constraints={"video": {
-                                "width": {"ideal": stream_cfg.capture_width},
-                                "height": {"ideal": stream_cfg.capture_height},
-                            }},
-                        ),
-                    )
-                    annotated_output = gr.Image(
-                        label="2. PharmaGuard annotated output",
-                        type="numpy",
-                        format=stream_cfg.output_format,
-                        interactive=False,
-                        elem_id="pg-output",
-                    )
+                    # Left column: Video streams
+                    with gr.Column(scale=7):
+                        with gr.Row():
+                            webcam_input = gr.Image(
+                                sources=["webcam"],
+                                streaming=True,
+                                label="1. Camera input (click to start webcam)",
+                                type="numpy",
+                                webcam_options=gr.WebcamOptions(
+                                    mirror=False,
+                                    constraints={"video": {
+                                        "width": {"ideal": stream_cfg.capture_width},
+                                        "height": {"ideal": stream_cfg.capture_height},
+                                    }},
+                                ),
+                            )
+                            annotated_output = gr.Image(
+                                label="2. PharmaGuard annotated output",
+                                type="numpy",
+                                format=stream_cfg.output_format,
+                                interactive=False,
+                                elem_id="pg-output",
+                            )
 
-            # Right column: Telemetry & Alert Operations Console
-            with gr.Column(scale=5):
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        status_val = gr.Textbox(value=SIGNAL_LABELS["STANDBY"], label="Camera / Stream Status", interactive=False)
-                    with gr.Column(scale=1):
-                        tracked_val = gr.Textbox(value="0", label="Persons Tracked", interactive=False)
+                    # Right column: Telemetry & Alert Operations Console
+                    with gr.Column(scale=5):
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                status_val = gr.Textbox(value=SIGNAL_LABELS["STANDBY"], label="Camera / Stream Status", interactive=False)
+                            with gr.Column(scale=1):
+                                tracked_val = gr.Textbox(value="0", label="Persons Tracked", interactive=False)
 
-                with gr.Row():
-                    with gr.Column(scale=1):
-                        fps_val = gr.Textbox(value="0.0", label="Delivered FPS (end-to-end, server-measured)", interactive=False)
-                    with gr.Column(scale=1):
-                        gr.HTML(
-                            "<div style='font-size:12px;color:#94a3b8'>Displayed FPS (this browser)</div>"
-                            "<div id='pg-client-fps' style='font-size:20px;font-weight:600'>0</div>"
-                        )
+                        with gr.Row():
+                            with gr.Column(scale=1):
+                                fps_val = gr.Textbox(value="0.0", label="Delivered FPS (end-to-end, server-measured)", interactive=False)
+                            with gr.Column(scale=1):
+                                gr.HTML(
+                                    "<div style='font-size:12px;color:#94a3b8'>Displayed FPS (this browser)</div>"
+                                    "<div id='pg-client-fps' style='font-size:20px;font-weight:600'>0</div>"
+                                )
 
-                with gr.Row():
-                    latency_val = gr.Textbox(value="-", label="Latency breakdown (measured)", interactive=False)
+                        with gr.Row():
+                            latency_val = gr.Textbox(value="-", label="Latency breakdown (measured)", interactive=False)
 
-                with gr.Row():
-                    active_ids_val = gr.Textbox(value="None", label="Active Tracking IDs", interactive=False)
+                        with gr.Row():
+                            active_ids_val = gr.Textbox(value="None", label="Active Tracking IDs", interactive=False)
 
-                # Security Alerts Feed
-                gr.HTML("<div style='font-weight: 600; color: #f87171; font-size: 13px; margin-top: 10px;'>🚨 ALERTS FOR STAFF REVIEW</div>")
-                alerts_box = gr.HTML(value=format_alerts_html([]), elem_classes=["alert-box"])
+                        # Security Alerts Feed
+                        gr.HTML("<div style='font-weight: 600; color: #f87171; font-size: 13px; margin-top: 10px;'>🚨 ALERTS FOR STAFF REVIEW</div>")
+                        alerts_box = gr.HTML(value=format_alerts_html([]), elem_classes=["alert-box"])
 
-                # Activity & Audit Event Timeline
-                gr.HTML("<div style='font-weight: 600; color: #38bdf8; font-size: 13px; margin-top: 10px;'>📋 AUDIT & EVENT TIMELINE</div>")
-                events_box = gr.HTML(value=format_events_html([]), elem_classes=["event-box"])
+                        # Activity & Audit Event Timeline
+                        gr.HTML("<div style='font-weight: 600; color: #38bdf8; font-size: 13px; margin-top: 10px;'>📋 AUDIT & EVENT TIMELINE</div>")
+                        events_box = gr.HTML(value=format_events_html([]), elem_classes=["event-box"])
 
-                # Controls
-                with gr.Accordion("⚙️ Detection & Zone Configuration", open=False):
-                    conf_slider = gr.Slider(
-                        minimum=0.2, maximum=0.9, value=cfg.tracker.track_high_threshold, step=0.05,
-                        label="Person confidence threshold (tracking)"
-                    )
-                    dwell_slider = gr.Slider(
-                        minimum=0.6, maximum=2.0, value=cfg.behavior.alert_threshold, step=0.05,
-                        label="Alert threshold (suspicion score; shelf->bag->exit ~1.1, shelf->pocket->exit ~0.85)"
-                    )
-                    apply_btn = gr.Button("Apply Settings", size="sm")
-                    cfg_status = gr.Textbox(label="Config Status", interactive=False, max_lines=1)
-                    reset_btn = gr.Button("Reset Tracking & Clear Alerts", variant="secondary", size="sm")
+                        # Controls
+                        with gr.Accordion("⚙️ Detection & alert thresholds", open=False):
+                            conf_slider = gr.Slider(
+                                minimum=0.2, maximum=0.9, value=cfg.tracker.track_high_threshold, step=0.05,
+                                label="Person confidence threshold (tracking)"
+                            )
+                            dwell_slider = gr.Slider(
+                                minimum=0.6, maximum=2.0, value=cfg.behavior.alert_threshold, step=0.05,
+                                label="Alert threshold (suspicion score; shelf->bag->exit ~1.1, shelf->pocket->exit ~0.85)"
+                            )
+                            apply_btn = gr.Button("Apply Settings", size="sm")
+                            cfg_status = gr.Textbox(label="Config Status", interactive=False, max_lines=1)
+                            reset_btn = gr.Button("Reset Tracking & Clear Alerts", variant="secondary", size="sm")
+
+            review_tab = gr.Tab("Event review")
+            with review_tab:
+                review_loader = build_review_tab(pipeline)
+
+            with gr.Tab("Zones"):
+                build_zones_tab(pipeline, config_path)
 
         panel_outputs = [status_val, tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
 
@@ -504,6 +516,12 @@ def create_pharmaguard_ui(
         test_btn.click(fn=on_alarm_test, inputs=None, outputs=alarm_outputs, api_name="alarm_test")
         alarm_timer = gr.Timer(cfg.alarm.poll_interval_sec)
         alarm_timer.tick(fn=refresh_alarm, inputs=[alarm_cache], outputs=alarm_outputs, show_progress="hidden")
+
+        # Event review: refresh on page load and whenever the tab is opened.
+        if review_loader is not None:
+            load_fn, load_in, load_out = review_loader
+            demo.load(load_fn, load_in, load_out)
+            review_tab.select(load_fn, load_in, load_out)
 
         # Panels: 1 Hz, off the per-frame path.
         timer = gr.Timer(1.0)

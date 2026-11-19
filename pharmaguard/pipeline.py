@@ -15,7 +15,7 @@ import numpy as np
 import cv2
 import torch
 
-from pharmaguard.config import PharmaGuardConfig, DetectorConfig
+from pharmaguard.config import PharmaGuardConfig, DetectorConfig, ShelfZone
 from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult
 from pharmaguard.tracker import ByteTrackerWrapper, TrackingResult, TrackedPerson
 from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
@@ -86,6 +86,7 @@ class PharmaGuardPipeline:
                 imgsz=self.config.detector.imgsz, half_precision=self.config.detector.half_precision,
             ))
         self.bag_boxes: List[np.ndarray] = []
+        self.last_raw_frame: Optional[np.ndarray] = None   # un-annotated RGB, for the zone editor snapshot
         self.alert_manager = AlertManager(self.config.alert)
         self.event_manager = EventManager()
         self.alarm = AlarmController(self.config.alarm, on_action=self._on_alarm_action)
@@ -156,6 +157,7 @@ class PharmaGuardPipeline:
         input_h, input_w = frame_rgb.shape[:2]
 
         frame_rgb = normalize_frame(frame_rgb, self.config.stream.max_process_width)
+        self.last_raw_frame = frame_rgb
         h, w = frame_rgb.shape[:2]
 
         # Convert to BGR for OpenCV processing & standard model input
@@ -343,6 +345,16 @@ class PharmaGuardPipeline:
             self._mirror_async()
         if action != "ALARM_RAISED":  # raised alarms are already persisted as the alert record itself
             self.alert_manager.persist_record({"record": action, **details})
+
+    def set_zones(self, zones: List["ShelfZone"]) -> None:
+        """Replace monitored zones on the running system (zone editor). Takes effect on the next frame."""
+        with self._lock:
+            new = list(zones)
+            self.config.zones = new
+            self.behavior_analyzer.zones = new
+        self.event_manager.log(category="SYSTEM", message=f"Monitoring zones updated: {[z.name for z in zones]}")
+        if self.store is not None:
+            self.store.audit("ZONES_UPDATED", None, {"zones": [z.model_dump() for z in zones]})
 
     def telemetry_snapshot(self) -> TelemetrySnapshot:
         """Thread-safe read of stream health for the dashboard poller."""

@@ -45,6 +45,7 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 - **Suspicion Scoring for Staff Review**: decaying, weighted evidence; browsing alone can never alert; REVIEW (visual) and ALERT (alarm) fire once per incident with human-readable reasons. The system flags interactions for review and does not determine theft or intent.
 - **Operator Alarm**: browser siren on ALERT only (once per incident), visual banner and flashing frame border, Acknowledge / Reset with operator audit trail, and a manual Test alarm button. REVIEW warnings are visual only.
 - **Event Recording**: every REVIEW/ALERT stored in SQLite (camera, track, incident, score, reasons, acknowledgement, staff review outcome) with a 10 s annotated evidence clip; mirrored to Google Drive in Colab; 7-day retention.
+- **Event Review & Zone Editor**: review tab with clip playback and staff verdicts (confirmed / false alarm), which produce a measured false-alarm rate; draw shelf zones on a live snapshot and apply them without restarting.
 - **Alert Management & Throttling**: Cooldown suppression prevents alert storms while recording alerts to structured audit logs (`pharmaguard_alerts.jsonl`).
 - **Professional Security Dashboard**: High-contrast dark surveillance console built with Gradio displaying live FPS, latency, tracked count, active IDs, real-time alert feed, and zone configuration sliders.
 

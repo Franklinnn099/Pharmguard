@@ -46,7 +46,9 @@ pharmguard/
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
 │   ├── pipeline.py                 # Per-frame orchestration, downscale, stage timings
 │   ├── telemetry.py                # Server-measured end-to-end FPS/latency + signal state
-│   ├── ui.py                       # Gradio Security Operations Dashboard
+│   ├── ui.py                       # Dashboard layout: alarm strip + Live monitor tab, wiring
+│   ├── ui_review.py                # Event review tab: table, details, clip, staff verdicts, FA rate
+│   ├── ui_zones.py                 # Zone editor tab: click-to-draw, apply live, save to configs/
 │   └── app.py                      # CLI launcher with local & Colab presets
 │
 ├── colab/                          # Google Colab execution artifacts
@@ -63,6 +65,7 @@ pharmguard/
     ├── test_alerts.py              # Cooldown throttling & persistence tests
     ├── test_alarm.py               # Alarm state machine, dedupe, ack/reset/test, pipeline integration
     ├── test_recording.py           # Event store, clips, retention, mirroring, pipeline integration
+    ├── test_dashboard.py           # Zone editor logic/safety, live zone updates, review tab
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip

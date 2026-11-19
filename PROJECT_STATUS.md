@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-19 (Priorities 1-4 merged to `main`; Priority 5 on branch `p5-event-recording`)
+**Last updated**: 2026-11-19 (Priorities 1-5 merged to `main`; Priority 6 on branch `p6-dashboard`)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 110 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+**Test suite**: 129 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -32,6 +32,9 @@
 | Event store: REVIEW/ALERT persisted to SQLite with event id, time, camera id, track id, incident, category, score, reasons, clip, acknowledgement, staff review; idempotent; survives restart; 7-day retention deletes clips; Drive-style mirror is a valid DB | `tests/test_recording.py` |
 | Evidence clips: 5 s pre + 5 s post annotated frames, encoded off-thread; real files decode (ffmpeg H.264 and OpenCV avc1 paths verified locally) | `tests/test_recording.py` |
 | Full pipeline: shelf->bag->leave stores 2 events + 2 playable clips + ack + audit, mirrored | `test_pipeline_records_events_clips_ack_and_mirrors` |
+| Dashboard tabs: Live monitor / Event review / Zones; alarm strip visible on all tabs | `tests/test_dashboard.py`, Chrome |
+| Event review: table, details, **clip playback in browser**, staff verdict persisted + audited, false-alarm rate from verdicts | 19 tests + Chrome on seeded real recordings (TECHNICAL_DECISIONS §10) |
+| Zone editor: click-to-draw on live snapshot, validation, apply live (next frame), save confined to `configs/*.yaml` | Tests + Chrome (corner clicks register) |
 | Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
 | Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
 
@@ -76,16 +79,20 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 | P3-2 | A relaxed hand at the hip registers as "pocket" on real imagery (harmless unless within 3 s after a shelf contact by the same hand); `pocket_radius_torso` uncalibrated | Calibrate on staged clips |
 | P3-3 | CPU only: pose + bag detection caps compute at ~6.9 FPS (11.6 FPS without bags). GPU unmeasured | Colab run |
 | R8 | One pipeline is shared by all sessions; two simultaneous streams corrupt tracker state | Before demo: single-operator lock |
-| — | No event review screen or zone editor yet (records exist; zones via `configs/demo_shelf.yaml`) | Priority 6 |
+| P6-1 | Zone editor exercised in the browser only up to corner clicks; Add/Apply/Save verified via handler tests | Use it in the staged run |
 | P5-1 | Clip encoding on Colab relies on the ffmpeg binary (present on Colab, unverified there until the live run); fallback codecs are recorded per clip | Colab run |
 | P5-2 | Drive mirroring unverified on a real Drive mount (tested against a local directory) | Colab run with Section 7b |
 | P4-1 | Real-ALERT siren path verified by unit tests and the shared code path; only the TEST path was clicked through in a browser | Check during staged run (DEMO_STAGING §5) |
 
 ## 5. Next priorities
 
-1. **Owner:** live Colab run with Drive mounted (Sections 3 and 7b), then the staged scenarios in `docs/DEMO_STAGING.md`.
-2. **Priority 6 — dashboard:** event review tab (list, details, clip playback, mark confirmed / false alarm, which feeds the measured false-alarm rate) and a zone editor.
-3. **Nov 29–30:** staged-scenario measurements, fixes, fallback video.
+All six engineering priorities are implemented and tested locally. What remains is measurement on the real setup:
+
+1. **Owner — live Colab run** (Section 3, with Drive mounted): first real GPU, tunnel, clip-encoding and Drive numbers.
+2. **Owner — staged scenarios** (`docs/DEMO_STAGING.md`): draw the zone in the Zones tab, run all 10 scenarios, review every
+   event in the Event review tab. This yields the **measured false-alert and miss rates** the mandate requires.
+3. **Nov 29–30:** fix whatever the staged runs expose (likely `pocket_radius_torso` and thresholds), record the fallback video,
+   and rehearse with the alarm checks (DEMO_STAGING §5).
 
 ## 6. How to run
 
