@@ -39,7 +39,7 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 ## Key Capabilities
 
 - **Real-Time Person Detection**: Pretrained YOLO inference filtering for person detections with configurable confidence and IoU thresholds.
-- **Multi-Object Tracking**: IoU-based tracker with persistent IDs (ByteTrack-style; known limitations listed in PROJECT_STATUS.md §4).
+- **Multi-Object Tracking**: ByteTrack with a time-scaled Kalman filter, low-confidence occlusion recovery, 2-frame ID confirmation and a motion gate for low tunnel frame rates (TECHNICAL_DECISIONS.md §6).
 - **Configurable Shelf Zones**: Resolution-independent normalized 2D polygons representing monitored pharmacy shelves (e.g. narcotics or restricted medicine racks).
 - **Behavioral Sequence Recognition**:
   - `SUSPICIOUS_LOITERING`: Detects when an individual lingers near sensitive stock beyond the alert dwell threshold (default: 8.0s).
@@ -110,7 +110,7 @@ python tools/e2e_benchmark.py --url http://127.0.0.1:7860   # browser-equivalent
 
 - [x] Browser-to-server-to-browser streaming verified locally; Colab GPU run pending.
 - [x] Pretrained YOLO person detection.
-- [ ] Robust multi-person tracking (ByteTrack-standard gating, Kalman, occlusion).
+- [x] Robust multi-person tracking (ByteTrack + Kalman, occlusion, crossing): verified on synthetic ground truth; staged real-video check pending.
 - [ ] Shelf interaction analysis for webcam-facing-shelf setup (hands, bag/pocket, scoring).
 - [x] Actionable alerts and professional security console UI.
 - [ ] Pose estimation / hand-in-shelf keypoint validation.

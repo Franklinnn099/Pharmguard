@@ -105,11 +105,13 @@ class PharmaGuardPipeline:
             message=f"Pipeline initialized with model '{self.model_name}' on device '{self.device}'"
         )
 
-    def process_frame(self, frame_rgb: np.ndarray) -> PipelineOutput:
+    def process_frame(self, frame_rgb: np.ndarray, timestamp: Optional[float] = None) -> PipelineOutput:
         """Process a single frame captured from the webcam (RGB format).
 
         Args:
             frame_rgb: RGB image numpy array (H, W, 3) or (H, W, 4).
+            timestamp: optional frame time in seconds (e.g. video time for recorded footage).
+                Defaults to the live monotonic clock.
 
         Returns:
             PipelineOutput with annotated frame and monitoring metrics.
@@ -118,9 +120,9 @@ class PharmaGuardPipeline:
             return self._create_empty_output(time.perf_counter(), "NO_SIGNAL")
 
         with self._lock:
-            return self._process_locked(frame_rgb)
+            return self._process_locked(frame_rgb, timestamp)
 
-    def _process_locked(self, frame_rgb: np.ndarray) -> PipelineOutput:
+    def _process_locked(self, frame_rgb: np.ndarray, timestamp: Optional[float]) -> PipelineOutput:
         start_time = self.telemetry.mark_arrival()
         self.frame_counter += 1
         input_h, input_w = frame_rgb.shape[:2]
@@ -143,7 +145,7 @@ class PharmaGuardPipeline:
 
         # 2. Multi-Object Tracking (ByteTrack)
         t_track_start = time.perf_counter()
-        tracking_result = self.tracker.update(detection_result)
+        tracking_result = self.tracker.update(detection_result, timestamp=timestamp)
         t_track_end = time.perf_counter()
         track_ms = (t_track_end - t_track_start) * 1000.0
 

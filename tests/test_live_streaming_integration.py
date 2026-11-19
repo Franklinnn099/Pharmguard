@@ -68,7 +68,9 @@ def test_multi_person_tracking_consistency():
         class_id=np.array([0, 0], dtype=np.int32),
         class_name=["person", "person"]
     )
-    trk1 = pipeline.tracker.update(det1)
+    # IDs are issued on the second consecutive detection (1-frame false positives never get an ID).
+    assert pipeline.tracker.update(det1, timestamp=0.0).active_ids == []
+    trk1 = pipeline.tracker.update(det1, timestamp=0.1)
     assert len(trk1.active_ids) == 2
     id_a, id_b = trk1.active_ids[0], trk1.active_ids[1]
     assert id_a != id_b
@@ -84,7 +86,7 @@ def test_multi_person_tracking_consistency():
         class_id=np.array([0, 0], dtype=np.int32),
         class_name=["person", "person"]
     )
-    trk2 = pipeline.tracker.update(det2)
+    trk2 = pipeline.tracker.update(det2, timestamp=0.2)
     assert len(trk2.active_ids) == 2
     # Identities must remain identical without switching
     assert id_a in trk2.active_ids
@@ -113,7 +115,8 @@ def test_shelf_monitoring_and_behavior_alerts():
         class_id=np.array([0], dtype=np.int32),
         class_name=["person"]
     )
-    trk_res = pipeline.tracker.update(det_inside)
+    pipeline.tracker.update(det_inside, timestamp=0.0)          # candidate
+    trk_res = pipeline.tracker.update(det_inside, timestamp=0.1)  # confirmed -> ID issued
     events = pipeline.behavior_analyzer.analyze(trk_res, frame_width=640, frame_height=480)
     assert any(e.event_type == BehaviorEventType.ZONE_ENTER for e in events)
 

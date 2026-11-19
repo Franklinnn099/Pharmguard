@@ -27,12 +27,13 @@ pharmguard/
 ├── benchmark.py                    # Server-side compute benchmark (incl. return-frame encode)
 ├── docs/AUDIT_2026-11-19.md        # Takeover audit: verified defects, measurements, risks
 ├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
+├── tools/track_video.py            # Run pipeline on recorded video (video time); tracking report + annotated MP4
 │
 ├── pharmaguard/                    # Core Python package
 │   ├── __init__.py                 # Package version declaration
 │   ├── config.py                   # Pydantic schemas (detector, tracker, zones, alerts, UI)
 │   ├── detector.py                 # BaseDetector interface & YOLODetector implementation
-│   ├── tracker.py                  # IoU tracker, ByteTrack-style (no Kalman yet; see audit F1/F2)
+│   ├── tracker.py                  # ByteTrack + time-scaled Kalman + motion fallback gate
 │   ├── behavior.py                 # PharmacyBehaviorAnalyzer (dwell, loitering, rapid retreat)
 │   ├── alerts.py                   # AlertManager (throttling, severity grading, JSONL logging)
 │   ├── events.py                   # EventManager (chronological ring buffer)
@@ -49,7 +50,8 @@ pharmguard/
 └── tests/                          # Automated test suite
     ├── test_config.py              # Configuration & YAML serialization tests
     ├── test_detector.py            # Pretrained YOLO inference & empty-frame tests
-    ├── test_tracker.py             # ByteTrack ID consistency & recovery tests
+    ├── test_tracker.py             # Ground-truth scenarios: speed/FPS sweep, crossing, occlusion, swaps
+    ├── scenario_utils.py           # Synthetic scenario builders + identity evaluation
     ├── test_behavior.py            # Spatial ROI, dwell time, & rapid retreat tests
     ├── test_alerts.py              # Cooldown throttling & persistence tests
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests

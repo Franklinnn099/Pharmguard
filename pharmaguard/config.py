@@ -37,7 +37,12 @@ class DetectorConfig(BaseModel):
         default="yolov8n.pt",
         description="Pretrained model weights (e.g. yolov8n.pt, yolo11n.pt, rtdetr-l.pt)."
     )
-    confidence_threshold: float = Field(default=0.40, ge=0.05, le=1.0)
+    confidence_threshold: float = Field(
+        default=0.10, ge=0.05, le=1.0,
+        description="Detector output floor. Must be <= tracker.track_low_threshold so ByteTrack's "
+                    "low-confidence recovery stage receives partially occluded people. "
+                    "Display/new-track confidence is governed by the tracker thresholds."
+    )
     iou_threshold: float = Field(default=0.45, ge=0.1, le=1.0)
     target_classes: List[int] = Field(
         default_factory=lambda: [0],
@@ -58,12 +63,42 @@ class DetectorConfig(BaseModel):
 
 
 class TrackerConfig(BaseModel):
-    """ByteTrack multi-object tracking configuration."""
+    """ByteTrack multi-object tracking configuration (Zhang et al., ECCV 2022).
+
+    Defaults follow the published ByteTrack / Ultralytics settings, with time-based (not frame-based)
+    lifetimes because tunnel-delivered frame rates vary between ~3 and ~25 FPS.
+    """
     tracker_type: str = "bytetrack"
-    track_activation_threshold: float = 0.35
-    lost_track_buffer: int = 30  # Number of frames to hold a lost track before discarding
-    minimum_matching_threshold: float = 0.80
-    frame_rate: int = 30
+    track_high_threshold: float = Field(default=0.45, ge=0.05, le=1.0,
+        description="Detections at/above this join the first association stage.")
+    track_low_threshold: float = Field(default=0.10, ge=0.01, le=1.0,
+        description="Detections in [low, high) are only used to keep EXISTING tracks alive (stage 2).")
+    new_track_threshold: float = Field(default=0.50, ge=0.05, le=1.0,
+        description="Minimum confidence for an unmatched detection to start a candidate track.")
+    match_iou_threshold: float = Field(default=0.20, ge=0.0, le=1.0,
+        description="Stage 1 minimum IoU between Kalman-predicted box and detection (ByteTrack: 1-0.8).")
+    low_match_iou_threshold: float = Field(default=0.50, ge=0.0, le=1.0,
+        description="Stage 2 minimum IoU for low-confidence detections (stricter: they are less reliable).")
+    unconfirmed_match_iou_threshold: float = Field(default=0.30, ge=0.0, le=1.0,
+        description="Minimum IoU to confirm a candidate track on its next detection.")
+    max_center_speed: float = Field(default=2.0, ge=0.0,
+        description="Fallback gate when IoU is too low (low FPS / fast motion): accept a match if the box centre "
+                    "moved <= this many body-heights per second of elapsed time (walking ~0.8, brisk ~1.2). "
+                    "0 disables the fallback (pure ByteTrack IoU gating).")
+    center_gate_slack: float = Field(default=0.1, ge=0.0,
+        description="Constant allowance (body heights) added to the motion gate for detector box jitter.")
+    max_height_ratio: float = Field(default=1.35, ge=1.0,
+        description="Fallback gate: detection height must be within this ratio of the predicted height.")
+    min_confirm_hits: int = Field(default=2, ge=1,
+        description="Consecutive detections before a track gets a visible ID (suppresses 1-frame false positives).")
+    lost_track_seconds: float = Field(default=2.0, gt=0.0,
+        description="How long an unseen (occluded) track is kept for re-association before removal.")
+    lost_velocity_decay: float = Field(default=0.85, gt=0.0, le=1.0,
+        description="Per nominal frame decay of predicted velocity while lost, so a person who stops "
+                    "behind an occluder is not extrapolated off-screen.")
+    frame_rate: int = Field(default=30, ge=1,
+        description="Nominal rate the Kalman noise model is tuned for; real time gaps are scaled to it.")
+    max_trace_points: int = 30
 
 
 class AlertConfig(BaseModel):

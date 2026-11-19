@@ -40,7 +40,7 @@ We need to assign persistent IDs to people, maintain tracking through temporary 
    - *Mechanism*: Associates almost every detection box (both high-confidence and low-confidence detections) using Kalman filtering and bipartite matching. Low-confidence detections recover occluded individuals without introducing false positives.
    - *Pros*: High FPS (runs purely on bounding box geometry without heavy deep appearance feature extraction), low latency, minimal identity switches. Available with MIT license via `supervision`.
    - *Decision*: **Selected as the default multi-object tracker.**
-   - *Implementation status (audit 2026-11-19, corrected)*: the shipped tracker is a **hand-written IoU tracker**, not ByteTrack via `supervision` (never imported) and has **no Kalman filter**. Its low-confidence second stage is unreachable because the detector's 0.40 confidence floor is above the tracker's 0.35 split. It also switches IDs once per-frame motion exceeds ~55 px. Fixing this is Priority 2.
+   - *History*: the prototype shipped a hand-written IoU tracker described as ByteTrack. It had no Kalman filter, its low-confidence stage could never run, and it switched IDs above ~55 px/frame of motion (audit F1-F4). Replaced on 2026-11-19, see §6.
 
 2. **DeepSORT / BoT-SORT**
    - *Pros*: Uses deep ReID (Re-Identification) appearance embeddings.
@@ -140,3 +140,50 @@ infrastructure, so it is restricted to staged footage of consenting participants
 `gradio==6.32.0` and `ultralytics==8.4.215` are pinned exactly to the tested set. The previous pins
 (`gradio<=5.6.0`, `ultralytics<=8.3.40`) had never been installed or tested together. `supervision`/`lap` were
 removed (unused) and `scipy` was added (imported directly). torch is left unpinned so Colab keeps its CUDA build.
+
+---
+
+## 6. Tracker Rewrite: ByteTrack + Kalman + Time-Aware Motion Gate (2026-11-19)
+
+### Decision
+`pharmaguard/tracker.py` was rewritten as a faithful ByteTrack, keeping the `TrackedPerson` / `TrackingResult` interface,
+so behaviour, annotator and UI did not change.
+
+### Why not Ultralytics' built-in `model.track()`?
+- It fuses detection and tracking into one call, which breaks the `BaseDetector` abstraction needed for the Apache-2.0 detector swap.
+- Its internals (`ultralytics.trackers.*`) have changed across releases; we pin Ultralytics exactly and still want a tracker we can test and reason about.
+- We need two deviations it does not offer: time-scaled prediction and a motion fallback gate for low tunnel FPS.
+
+### Algorithm (deviations from the paper in bold)
+1. Constant-velocity Kalman filter on (cx, cy, aspect, h), with DeepSORT/ByteTrack noise weights. **The step is scaled by the real time between frames** (`dt * frame_rate`), because tunnel delivery is irregular (3-25 FPS).
+2. Stage 1: tracked and lost tracks against detections with conf >= 0.45, Hungarian assignment on score-fused IoU, IoU >= 0.20.
+3. Stage 2: still-unmatched tracked tracks against detections with conf in [0.10, 0.45), IoU >= 0.50. **The detector floor was lowered from 0.40 to 0.10 so this stage receives anything**; the operator slider now governs tracker thresholds instead.
+4. Candidates need **2 consecutive detections before an ID is issued**, so one-frame false positives never consume IDs.
+5. **Lost tracks expire after 2.0 s of real time** (previously 30 frames, i.e. anything from 1 s to 10 s depending on FPS). **Lost-track velocity decays by 0.85 per nominal frame**, so a person who stops behind an occluder is not extrapolated off-screen. Occluded tracks are drawn as a dashed grey box at the predicted position.
+6. **Motion fallback gate** (stages 1 and 3 only): if IoU fails, a match is still accepted when the centre moved <= `2.0 body-heights/s * elapsed + 0.1` and box heights are within 1.35x. Fallback pairs always rank below IoU-qualified pairs. Reason: at 3 FPS a walking person (0.8 h/s) moves ~0.27 h per frame; a 0.4 h-wide box then has IoU ~0.2, so pure IoU gating loses them. This is verified by `test_motion_fallback_disabled_reproduces_pure_bytetrack_limit`.
+
+### Measured on ground-truth scenarios (`tests/scenario_utils.py`), old vs new
+"sw" = ID switches, "swap" = identities exchanged between people, "cov" = share of frames where a visible person carried an ID.
+
+| Scenario | Old sw / swap / cov | New sw / swap / cov |
+|---|---|---|
+| walk 0.8 h/s @ 3 FPS | 11 / 0 / 100% | 0 / 0 / 92% |
+| walk 1.2 h/s @ 5 FPS | 19 / 0 / 100% | 0 / 0 / 95% |
+| walk 1.2 h/s @ 10 FPS | 0 / 0 / 100% | 0 / 0 / 98% |
+| irregular 50-400 ms frame gaps | 0 / 0 / 100% | 0 / 0 / 96% |
+| 2 crossing, hidden one at low conf | 2 / 1 / 98% | 0 / 0 / 98% |
+| 2 crossing, hidden one undetected | 1 / 0 / 100% | 0 / 0 / 98% |
+| side-by-side walkers @ 3 FPS | 16 / 8 / 100% | 0 / 0 / 83% |
+| partial occlusion, conf 0.2 for 1.5 s | 1 / 0 / 62% | 0 / 0 / 98% |
+| full occlusion 1 s | 1 / 0 / 100% | 0 / 0 / 98% |
+| 5-person crowd | 0 / 0 / 100% | 0 / 0 / 98% |
+| 1-frame false positive | 1 ID issued | 0 IDs issued |
+
+The new tracker's lower coverage is the confirmation delay: a new person's first frame has no ID (0.33 s at 3 FPS).
+Tracker cost: 1.3 ms/frame on the dev CPU with 4 people. Real-detector check: a panned photo of 3-4 people
+yields one stable ID per person at a simulated 5 FPS (`tools/track_video.py`,
+`test_tracker_with_real_detector_on_panning_photo`).
+
+### Known limits
+- No appearance re-identification. Someone hidden for more than 2 s, or who moves far while hidden, gets a new ID. This is acceptable for single-camera dwell and interaction logic; DeepSORT-style ReID was rejected for latency (§2).
+- Synthetic scenarios prove the logic, not real-world robustness. Staged webcam recordings of crossings and occlusion must be run through `tools/track_video.py` before Dec 1.

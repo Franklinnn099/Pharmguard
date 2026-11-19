@@ -78,6 +78,7 @@ class SecurityAnnotator:
         """Render person bounding boxes, persistent IDs, dwell time badges, and motion traces."""
         for tid, person in tracking_result.tracked_persons.items():
             if person.frames_lost > 0:
+                self._draw_occluded(frame, tid, person)
                 continue
 
             box = person.current_box
@@ -120,6 +121,28 @@ class SecurityAnnotator:
                 cv2.putText(frame, label_text, (x1 + 5, lbl_y1 - 4), font, scale, (255, 255, 255), thickness, lineType=cv2.LINE_AA)
 
         return frame
+
+    def _draw_occluded(self, frame: np.ndarray, tid: int, person: TrackedPerson) -> None:
+        """Dashed grey box at the Kalman-predicted position of a temporarily unseen person."""
+        if not self.config.show_boxes:
+            return
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = [int(v) for v in person.current_box]
+        x1, x2 = max(0, x1), min(w - 1, x2)
+        y1, y2 = max(0, y1), min(h - 1, y2)
+        if x2 <= x1 or y2 <= y1:
+            return
+        color = (150, 150, 150)
+        dash = 8
+        for x in range(x1, x2, dash * 2):
+            cv2.line(frame, (x, y1), (min(x + dash, x2), y1), color, 1)
+            cv2.line(frame, (x, y2), (min(x + dash, x2), y2), color, 1)
+        for y in range(y1, y2, dash * 2):
+            cv2.line(frame, (x1, y), (x1, min(y + dash, y2)), color, 1)
+            cv2.line(frame, (x2, y), (x2, min(y + dash, y2)), color, 1)
+        if self.config.show_labels:
+            cv2.putText(frame, f"ID #{tid} (occluded)", (x1 + 4, max(14, y1 + 14)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, lineType=cv2.LINE_AA)
 
     def draw_hud(
         self,

@@ -211,7 +211,12 @@ def create_pharmaguard_ui(
         )
 
     def update_thresholds(conf: float, dwell: float):
-        pipeline.detector.config.confidence_threshold = conf
+        # Detector floor stays low so ByteTrack's low-confidence stage keeps occluded people;
+        # the operator-facing threshold governs which detections can start/drive tracks.
+        trk = pipeline.tracker.config
+        trk.track_high_threshold = conf
+        trk.new_track_threshold = min(1.0, conf + 0.05)
+        trk.track_low_threshold = min(trk.track_low_threshold, conf)
         for z in pipeline.config.zones:
             z.dwell_alert_threshold_sec = dwell
         return f"Updated: Conf={conf:.2f}, Dwell={dwell:.1f}s"
@@ -234,7 +239,7 @@ def create_pharmaguard_ui(
                     <span style='background: #065f46; color: #34d399; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 9999px;'>
                         ● COMPUTE: {escape(device.upper())}
                     </span>
-                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {escape(str(model_info.get('model_name')))} + IoU tracker</div>
+                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {escape(str(model_info.get('model_name')))} + ByteTrack (Kalman)</div>
                 </div>
                 """)
 
@@ -298,8 +303,8 @@ def create_pharmaguard_ui(
                 # Controls
                 with gr.Accordion("⚙️ Detection & Zone Configuration", open=False):
                     conf_slider = gr.Slider(
-                        minimum=0.1, maximum=0.9, value=cfg.detector.confidence_threshold, step=0.05,
-                        label="YOLO Person Confidence Threshold"
+                        minimum=0.2, maximum=0.9, value=cfg.tracker.track_high_threshold, step=0.05,
+                        label="Person confidence threshold (tracking)"
                     )
                     dwell_slider = gr.Slider(
                         minimum=2.0, maximum=30.0, value=cfg.zones[0].dwell_alert_threshold_sec, step=1.0,
