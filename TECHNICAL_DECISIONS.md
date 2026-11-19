@@ -272,3 +272,54 @@ behaviour -> AlertManager) produces exactly `[WARNING, ALERT]`.
   played (`playing: true`) while state was TEST and stopped when the server returned to IDLE after 5 s; the action was
   written to the audit log. The real-ALERT browser path uses the same code with `kind=ALERT` (covered by unit tests,
   not separately clicked through).
+
+---
+
+## 9. Event Recording: SQLite Store + Evidence Clips (2026-11-19)
+
+### Store (`pharmaguard/storage.py`)
+- **SQLite (stdlib)**, chosen over PostgreSQL/files: zero setup, a single file, transactional, and enough for one camera with
+  rare events. Tables `events` (one row per REVIEW/ALERT) and `audit` (every alarm/review action).
+- Event fields: `event_uid` (= alert id, UNIQUE, so inserts are idempotent), wall-clock time, **camera_id**, **tracker_id**,
+  incident_id, **category** (SUSPICION_ALERT / SUSPICION_REVIEW), severity, zone, **score**, **reasons** (JSON),
+  **clip_path / clip_status / clip_codec**, acknowledged_by/at, reset_at, and staff **review_status**
+  (open / confirmed / false_alarm / dismissed) with note and reviewer.
+  The review fields exist so the measured false-alarm rate can come from real staff outcomes.
+- One connection serialised by a lock; written from the frame thread (inserts) and the evidence worker (clip status).
+
+### Google Drive (Colab)
+SQLite on a FUSE/Drive mount is a known locking and corruption risk. The database and clips are therefore written to
+local disk (`--data-dir`, default `data/`, `/content/pg_data` in Colab). With `--mirror-dir` (Drive), the DB is copied using
+**SQLite's online backup API** (consistent while in use; written to `.tmp`, then atomically renamed), and finished clips
+are copied too. Mirroring runs on the evidence worker thread, never on the frame path.
+
+### Evidence clips (`pharmaguard/evidence.py`)
+- Ring buffer of **annotated** frames (boxes, IDs, wrists, zones are what a reviewer needs), kept by frame timestamp,
+  capped at 15 FPS and 5 s (≈52 MB worst case at 640x360). No encoding on the frame path: frames are kept by reference.
+- On a recorded alert: pre-event 5 s + post-event 5 s, including the alert's own frame (an ordering bug found while
+  designing this: the alert fires before its frame is buffered, so a strict `>` would have dropped it).
+- Encoded by one background worker. Codec order, chosen by measurement (2026-11-19, dev laptop):
+
+  | Codec | Writes | 50 frames 640x360 | Browser-playable |
+  |---|---|---|---|
+  | ffmpeg libx264 (pipe) | yes (ffmpeg present locally and on Colab) | n/a | yes |
+  | OpenCV `avc1` | yes on this OpenCV 5.1 build; often absent in Linux pip wheels | 705 ms | yes |
+  | OpenCV `VP80` webm | yes | 1017 ms | yes |
+  | OpenCV `VP90` webm | yes | 5059 ms (too slow) | yes |
+  | OpenCV `mp4v` | yes | 158 ms | **no** (stored as `saved_not_browser_playable`) |
+
+- Variable delivered FPS: the clip frame rate is computed from frame timestamps, so playback runs at real speed.
+- Clips record **after** the alarm logic, so they show the overlays the operator saw.
+
+### Privacy and retention
+- Clips show faces. `retention_days` (default 7) deletes events, audit rows and clip files at startup.
+- `data/`, `*.db` and clip files are git-ignored. Tests use a temp `PHARMAGUARD_DATA_DIR`, and `benchmark.py` and
+  `tools/track_video.py` do not record unless asked (`--record-dir`).
+
+### Verified (`tests/test_recording.py`, 13 tests)
+Required fields stored; idempotent; acknowledgement keeps the first operator; review statuses validated and audited;
+survives restart; retention deletes events and clip files; the mirror copy opens as a valid DB; real clips decode with the
+expected frame count via both the ffmpeg and OpenCV paths; the clip window includes pre, post and trigger frames; the ring
+buffer is bounded and rate-capped; flush finalises partial clips; a crashing encoder is reported and the worker survives.
+In the full pipeline, scripted shelf->bag->leave produces 2 events (REVIEW and ALERT) with camera/track/incident/score/reasons,
+2 playable clips (>50 frames), acknowledgement recorded, audit rows, and the DB and clips mirrored.

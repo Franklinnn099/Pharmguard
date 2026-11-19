@@ -40,6 +40,8 @@ pharmguard/
 │   ├── behavior.py                 # Temporal sequences, decaying suspicion score, incident latching
 │   ├── alerts.py                   # AlertManager (throttling, severity grading, JSONL logging)
 │   ├── alarm.py                    # AlarmController: sound once per incident, ack/reset/test, audit
+│   ├── storage.py                  # SQLite EventStore (events, audit, review, retention, Drive mirror)
+│   ├── evidence.py                 # Ring buffer + background clip encoder (ffmpeg/avc1/VP8 fallbacks)
 │   ├── events.py                   # EventManager (chronological ring buffer)
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
 │   ├── pipeline.py                 # Per-frame orchestration, downscale, stage timings
@@ -60,6 +62,7 @@ pharmguard/
     ├── behavior_scenarios.py       # Skeleton actor scripts for behaviour tests
     ├── test_alerts.py              # Cooldown throttling & persistence tests
     ├── test_alarm.py               # Alarm state machine, dedupe, ack/reset/test, pipeline integration
+    ├── test_recording.py           # Event store, clips, retention, mirroring, pipeline integration
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip
@@ -109,7 +112,8 @@ python benchmark.py
 7. **Type Annotations**: Use Python type hints throughout all modules. Validate dataclasses or Pydantic models for configuration.
 8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer).
 9. **Measurement honesty**: never print or document a metric that was not measured (e.g. hard-coded "dropped frames"). Label compute-only vs end-to-end figures explicitly.
-10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG`.
+10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG` and `PHARMAGUARD_DATA_DIR`. Never commit `data/` (event DB and clips contain people's faces).
+11. **Never open SQLite on a Drive/FUSE mount**: write locally and use `EventStore.mirror()` (backup API).
 
 ---
 

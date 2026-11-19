@@ -78,7 +78,15 @@ The report lists the IDs issued and every REVIEW/ALERT with its reasons. Fill in
 4. During a staged concealment: an amber REVIEW banner appears at the transfer, then a red ALARM with siren when the actor leaves.
    Press **Acknowledge** (siren stops, banner shows who acknowledged), then **Reset** when resolved.
 
-## 6. Fallback demonstration
+## 6. Evidence and records
+
+- Each REVIEW/ALERT is stored in `data/pharmaguard.db` (Colab: `/content/pg_data`, copied to `MyDrive/PharmaGuard`) with a
+  10 s annotated clip in `clips/` (5 s before, 5 s after the event).
+- Staged recordings can also be turned into stored events + clips:
+  `python tools/track_video.py clip.mp4 --config configs/demo_shelf.yaml --record-dir staged_events`.
+- Records older than 7 days are deleted automatically. Only staged footage of consenting participants may be recorded.
+
+## 7. Fallback demonstration
 
 If the Colab link fails on the day, play the annotated output of the staged clips produced by
 `tools/track_video.py --out ...`. It is the same pipeline on recorded footage with identical results.

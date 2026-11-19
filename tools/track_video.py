@@ -47,6 +47,9 @@ def main() -> None:
     ap.add_argument("--fps", type=float, default=None, help="Process at this rate by skipping frames (simulate tunnel FPS)")
     ap.add_argument("--max-seconds", type=float, default=None)
     ap.add_argument("--config", default=None, help="YAML config (zones, thresholds)")
+    ap.add_argument("--record-dir", default=None,
+                    help="Also write events + evidence clips to this directory (off by default so offline "
+                         "evaluation never touches the operational event database)")
     args = ap.parse_args()
 
     cap = cv2.VideoCapture(args.video)
@@ -56,6 +59,10 @@ def main() -> None:
 
     config = PharmaGuardConfig.load_from_yaml(args.config) if args.config else PharmaGuardConfig()
     config.alert.alert_log_file = None  # offline evaluation must not write operational audit records
+    config.recording.enabled = bool(args.record_dir)
+    if args.record_dir:
+        config.recording.data_dir = args.record_dir
+        config.recording.camera_id = f"video:{os.path.basename(args.video)}"
     pipeline = PharmaGuardPipeline(config)
 
     writer = None
@@ -99,6 +106,7 @@ def main() -> None:
                 h, w = annotated.shape[:2]
                 writer = cv2.VideoWriter(args.out, cv2.VideoWriter_fourcc(*"mp4v"), args.fps or src_fps, (w, h))
             writer.write(annotated)
+    pipeline.close()                    # flush evidence clips
     wall = time.perf_counter() - t0
     cap.release()
     if writer is not None:
@@ -124,6 +132,8 @@ def main() -> None:
     print("=" * 66)
     if args.out:
         print(f"Annotated video  : {args.out}")
+    if args.record_dir:
+        print(f"Events + clips   : {os.path.abspath(args.record_dir)}")
 
 
 if __name__ == "__main__":

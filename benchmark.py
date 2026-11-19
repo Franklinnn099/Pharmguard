@@ -63,6 +63,7 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
 
     config = PharmaGuardConfig()
     config.alert.alert_log_file = None  # benchmarking must not write audit records
+    config.recording.enabled = False    # ...nor events/clips into the operational database
     if imgsz:
         config.detector.imgsz = imgsz
     if max_width:

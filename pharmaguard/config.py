@@ -189,6 +189,29 @@ class AlarmConfig(BaseModel):
     volume: float = Field(default=0.25, ge=0.0, le=1.0, description="Browser siren gain.")
 
 
+class RecordingConfig(BaseModel):
+    """Persistent event store (SQLite) and evidence clips.
+
+    The database and clips are written to ``data_dir`` on fast local disk. If ``mirror_dir`` is set
+    (e.g. a Google Drive folder in Colab) the database is copied there with SQLite's backup API and
+    finished clips are copied there too. SQLite is never opened directly on a Drive/FUSE mount
+    (locking and corruption risk).
+    """
+    enabled: bool = True
+    camera_id: str = Field(default="webcam-01", description="Recorded with every event.")
+    data_dir: str = Field(default_factory=lambda: os.environ.get("PHARMAGUARD_DATA_DIR", "data"),
+        description="Local directory for pharmaguard.db and clips/ (env PHARMAGUARD_DATA_DIR overrides).")
+    mirror_dir: Optional[str] = Field(default=None,
+        description="Optional durable copy target, e.g. /content/drive/MyDrive/PharmaGuard.")
+    record_severities: List[str] = Field(default_factory=lambda: ["WARNING", "ALERT"])
+    pre_event_sec: float = Field(default=5.0, ge=0.0, description="Evidence kept from before the alert.")
+    post_event_sec: float = Field(default=5.0, ge=0.0, description="Evidence recorded after the alert.")
+    max_clip_fps: float = Field(default=15.0, gt=0.0,
+        description="Ring buffer keeps at most this many frames per second (bounds memory).")
+    retention_days: float = Field(default=7.0, gt=0.0,
+        description="Events and clips older than this are deleted at startup (clips show people's faces).")
+
+
 class StreamConfig(BaseModel):
     """Browser <-> server video transport settings (the real-time critical path)."""
     capture_width: int = Field(default=640, description="Ideal webcam capture width requested from the browser.")
@@ -239,6 +262,7 @@ class PharmaGuardConfig(BaseModel):
     display: DisplayConfig = Field(default_factory=DisplayConfig)
     stream: StreamConfig = Field(default_factory=StreamConfig)
     alarm: AlarmConfig = Field(default_factory=AlarmConfig)
+    recording: RecordingConfig = Field(default_factory=RecordingConfig)
 
     @classmethod
     def load_from_yaml(cls, path: str) -> "PharmaGuardConfig":

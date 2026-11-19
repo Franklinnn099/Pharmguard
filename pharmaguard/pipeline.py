@@ -7,6 +7,8 @@ alert generation, fine-grained telemetry measurement, and visual annotation.
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
 import logging
+import os
+import shutil
 import threading
 import time
 import numpy as np
@@ -19,6 +21,8 @@ from pharmaguard.tracker import ByteTrackerWrapper, TrackingResult, TrackedPerso
 from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
 from pharmaguard.alerts import AlertManager, SecurityAlert
 from pharmaguard.alarm import AlarmController
+from pharmaguard.storage import EventStore
+from pharmaguard.evidence import EvidenceRecorder
 from pharmaguard.events import EventManager, SystemEvent
 from pharmaguard.annotator import SecurityAnnotator
 from pharmaguard.telemetry import StreamTelemetry, TelemetrySnapshot
@@ -85,6 +89,15 @@ class PharmaGuardPipeline:
         self.alert_manager = AlertManager(self.config.alert)
         self.event_manager = EventManager()
         self.alarm = AlarmController(self.config.alarm, on_action=self._on_alarm_action)
+        self.store: Optional[EventStore] = None
+        self.evidence: Optional[EvidenceRecorder] = None
+        rc = self.config.recording
+        if rc.enabled:
+            self.store = EventStore(rc.data_dir, camera_id=rc.camera_id, mirror_dir=rc.mirror_dir)
+            purged = self.store.purge_older_than(rc.retention_days)
+            if purged:
+                logger.info("Retention: deleted %d event(s) older than %.0f days", purged, rc.retention_days)
+            self.evidence = EvidenceRecorder(rc, os.path.join(rc.data_dir, "clips"), on_clip_done=self._on_clip_done)
         self.annotator = SecurityAnnotator(self.config.display)
 
         # Performance & Timing Metrics
@@ -182,6 +195,7 @@ class PharmaGuardPipeline:
         # 4. Alert Management -> operator alarm (ALERT sounds once per incident; WARNING is visual only)
         new_alerts = self.alert_manager.process_behavior_events(behavior_events)
         if new_alerts:
+            self._record_alerts(new_alerts, ts)
             self.alarm.on_alerts(new_alerts)
 
         # Log new events to event timeline
@@ -223,6 +237,8 @@ class PharmaGuardPipeline:
 
         # Convert back to RGB for browser/Gradio presentation
         annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
+        if self.evidence is not None:
+            self.evidence.add_frame(annotated_rgb, ts)   # reference only; encoding happens off-thread
 
         self.latency_ms = self.telemetry.mark_return(start_time)
         tele = self.telemetry.snapshot()
@@ -265,6 +281,48 @@ class PharmaGuardPipeline:
         self.last_output = output
         return output
 
+    # ------------------------------------------------------------------ event recording
+    def _record_alerts(self, alerts: List[SecurityAlert], ts: float) -> None:
+        if self.store is None:
+            return
+        for a in alerts:
+            if a.severity not in self.config.recording.record_severities:
+                continue
+            if self.store.record_alert(a) and self.evidence is not None:
+                self.store.set_clip(a.alert_id, "recording")
+                self.evidence.trigger(a.alert_id, ts)
+        self._mirror_async()
+
+    def _on_clip_done(self, event_uid: str, status: str, path: Optional[str], codec: Optional[str]) -> None:
+        """Runs on the evidence worker thread."""
+        if self.store is None:
+            return
+        mirror = self.config.recording.mirror_dir
+        if path and mirror:
+            try:
+                os.makedirs(os.path.join(mirror, "clips"), exist_ok=True)
+                shutil.copy2(path, os.path.join(mirror, "clips", os.path.basename(path)))
+            except OSError as exc:
+                logger.warning("Copying clip %s to %s failed: %s", path, mirror, exc)
+        self.store.set_clip(event_uid, status, path, codec)
+        self.store.mirror()
+
+    def _mirror_async(self) -> None:
+        if self.store is not None and self.store.mirror_dir and self.evidence is not None:
+            self.evidence.submit(self.store.mirror)
+
+    def close(self) -> None:
+        """Flush evidence clips and make the database durable (call on shutdown / end of video)."""
+        if self.evidence is not None:
+            self.evidence.flush()
+            self.evidence.wait_idle(timeout=180)
+            self.evidence.close()
+            self.evidence = None
+        if self.store is not None:
+            self.store.mirror()
+            self.store.close()
+            self.store = None
+
     def _on_alarm_action(self, action: str, details: Dict[str, Any]) -> None:
         """Audit every alarm transition: timeline + persistent log (who acknowledged what, when)."""
         operator = details.get("operator")
@@ -276,6 +334,13 @@ class PharmaGuardPipeline:
             "ALARM_TEST": f"Manual alarm test started by {operator}",
         }.get(action, action)
         self.event_manager.log(category="ALARM", message=msg, metadata=dict(details))
+        if self.store is not None:
+            self.store.audit(action, operator, details)
+            if action == "ALARM_ACKNOWLEDGED":
+                self.store.mark_acknowledged(details.get("alert_ids", []), operator or "operator")
+            elif action == "ALARM_RESET":
+                self.store.mark_reset(details.get("alert_ids", []))
+            self._mirror_async()
         if action != "ALARM_RAISED":  # raised alarms are already persisted as the alert record itself
             self.alert_manager.persist_record({"record": action, **details})
 

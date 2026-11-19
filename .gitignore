@@ -72,6 +72,11 @@ gradio_cached_examples/
 # Application Logs & Event Dumps
 logs/
 recordings/
+# Event database and evidence clips (personal data: never commit)
+data/
+*.db
+*.db-journal
+*.webm
 *.mp4
 *.avi
 *.jpg

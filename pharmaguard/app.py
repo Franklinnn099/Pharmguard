@@ -4,6 +4,7 @@ Supports running in Google Colab (with public Gradio share link & secure auth) o
 """
 
 import argparse
+import atexit
 import logging
 import os
 import secrets
@@ -62,6 +63,11 @@ def parse_args():
     parser.add_argument("--local", action="store_true", help="Local workstation mode (default): bind 127.0.0.1, no share link")
     parser.add_argument("--max-width", type=int, default=None, help="Server-side processing/return width (default 640)")
     parser.add_argument("--imgsz", type=int, default=None, help="Model inference size (default 640; 480/416 = faster)")
+    parser.add_argument("--data-dir", type=str, default=None, help="Local event DB + clips directory (default data/)")
+    parser.add_argument("--mirror-dir", type=str, default=None,
+                        help="Durable copy target, e.g. /content/drive/MyDrive/PharmaGuard (Colab + Drive)")
+    parser.add_argument("--camera-id", type=str, default=None, help="Camera identifier stored with every event")
+    parser.add_argument("--no-recording", action="store_true", help="Disable the event database and evidence clips")
     parser.add_argument("--port", type=int, default=7860, help="Port to bind Gradio UI (default 7860)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default 0.0.0.0)")
     parser.add_argument("--model", type=str, default=None, help="YOLO model name override (e.g. yolov8n.pt)")
@@ -102,6 +108,14 @@ def main():
         config.stream.max_process_width = args.max_width
     if args.imgsz:
         config.detector.imgsz = args.imgsz
+    if args.data_dir:
+        config.recording.data_dir = args.data_dir
+    if args.mirror_dir:
+        config.recording.mirror_dir = args.mirror_dir
+    if args.camera_id:
+        config.recording.camera_id = args.camera_id
+    if args.no_recording:
+        config.recording.enabled = False
     if args.local and (args.colab or args.share):
         raise SystemExit("--local cannot be combined with --colab/--share")
 
@@ -114,6 +128,10 @@ def main():
         print(f"  - Notice: No GPU detected; executing inference on CPU.")
 
     pipeline = PharmaGuardPipeline(config=config)
+    atexit.register(pipeline.close)   # finish evidence clips and mirror the event DB on shutdown
+    if config.recording.enabled:
+        print(f"  - Event DB: {os.path.abspath(pipeline.store.db_path)}"
+              + (f"  (mirrored to {config.recording.mirror_dir})" if config.recording.mirror_dir else ""))
 
     # 3. Build UI & Configure Queue for High-Speed Streaming
     print(f"[PharmaGuard] Building Gradio Security Operations Dashboard...")
