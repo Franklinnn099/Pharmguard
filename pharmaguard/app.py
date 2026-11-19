@@ -4,14 +4,18 @@ Supports running in Google Colab (with public Gradio share link & secure auth) o
 """
 
 import argparse
+import logging
 import os
 import secrets
 import sys
 import torch
 
+# Privacy: a surveillance system must not phone home. Must be set before gradio is imported.
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.pipeline import PharmaGuardPipeline
-from pharmaguard.ui import create_pharmaguard_ui
+from pharmaguard.ui import create_pharmaguard_ui, CLIENT_FPS_HEAD
 
 
 def resolve_auth_credentials(args):
@@ -55,6 +59,9 @@ def parse_args():
     parser.add_argument("--config", type=str, default=None, help="Path to YAML config file")
     parser.add_argument("--share", action="store_true", help="Generate public Gradio URL (Required for Colab)")
     parser.add_argument("--colab", action="store_true", help="Enable Colab-optimized settings (share=True, host=0.0.0.0)")
+    parser.add_argument("--local", action="store_true", help="Local workstation mode (default): bind 127.0.0.1, no share link")
+    parser.add_argument("--max-width", type=int, default=None, help="Server-side processing/return width (default 640)")
+    parser.add_argument("--imgsz", type=int, default=None, help="Model inference size (default 640; 480/416 = faster)")
     parser.add_argument("--port", type=int, default=7860, help="Port to bind Gradio UI (default 7860)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default 0.0.0.0)")
     parser.add_argument("--model", type=str, default=None, help="YOLO model name override (e.g. yolov8n.pt)")
@@ -68,6 +75,16 @@ def parse_args():
 
 def main():
     args = parse_args()
+    # Windows consoles/pipes may default to cp1252; never let a status emoji crash the server.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    for noisy in ("httpx", "httpx2", "matplotlib"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # 1. Load Configuration
     if args.config and os.path.exists(args.config):
@@ -81,6 +98,12 @@ def main():
         config.detector.model_name = args.model
     if args.device:
         config.detector.device = args.device
+    if args.max_width:
+        config.stream.max_process_width = args.max_width
+    if args.imgsz:
+        config.detector.imgsz = args.imgsz
+    if args.local and (args.colab or args.share):
+        raise SystemExit("--local cannot be combined with --colab/--share")
 
     print(f"[PharmaGuard] Initializing Computer Vision Pipeline...")
     print(f"  - Model: {config.detector.model_name}")
@@ -96,7 +119,7 @@ def main():
     print(f"[PharmaGuard] Building Gradio Security Operations Dashboard...")
     demo = create_pharmaguard_ui(pipeline=pipeline, config=config)
 
-    # Enable low-latency WebSocket queueing
+    # Queue is required for streaming; the stream event itself is limited to 1 concurrent frame.
     demo.queue(default_concurrency_limit=2)
 
     # 4. Resolve Authentication & Launch Options
@@ -120,7 +143,8 @@ def main():
         server_port=args.port,
         share=share_mode,
         auth=auth_config,
-        show_error=True
+        show_error=True,
+        head=CLIENT_FPS_HEAD,
     )
 
 

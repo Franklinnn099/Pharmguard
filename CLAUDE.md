@@ -24,22 +24,26 @@ pharmguard/
 ├── README.md                       # Public project documentation & quickstart
 ├── requirements.txt                # Pinned dependencies
 ├── main.py                         # Root entry point
-├── benchmark.py                    # Pipeline latency and FPS benchmarking script
+├── benchmark.py                    # Server-side compute benchmark (incl. return-frame encode)
+├── docs/AUDIT_2026-11-19.md        # Takeover audit: verified defects, measurements, risks
+├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
 │
 ├── pharmaguard/                    # Core Python package
 │   ├── __init__.py                 # Package version declaration
 │   ├── config.py                   # Pydantic schemas (detector, tracker, zones, alerts, UI)
 │   ├── detector.py                 # BaseDetector interface & YOLODetector implementation
-│   ├── tracker.py                  # Two-stage ByteTrack algorithm with Kalman trajectory smoothing
+│   ├── tracker.py                  # IoU tracker, ByteTrack-style (no Kalman yet; see audit F1/F2)
 │   ├── behavior.py                 # PharmacyBehaviorAnalyzer (dwell, loitering, rapid retreat)
 │   ├── alerts.py                   # AlertManager (throttling, severity grading, JSONL logging)
 │   ├── events.py                   # EventManager (chronological ring buffer)
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
+│   ├── pipeline.py                 # Per-frame orchestration, downscale, stage timings
+│   ├── telemetry.py                # Server-measured end-to-end FPS/latency + signal state
 │   ├── ui.py                       # Gradio Security Operations Dashboard
 │   └── app.py                      # CLI launcher with local & Colab presets
 │
 ├── colab/                          # Google Colab execution artifacts
-│   ├── PharmaGuard_Colab.ipynb     # Turnkey Colab notebook with Drive mount & live tunnel
+│   ├── PharmaGuard_Colab.ipynb     # Turnkey Colab notebook with live tunnel (no Drive mount yet)
 │   └── setup_colab.sh              # Shell script for automated Colab environment bootstrap
 │
 └── tests/                          # Automated test suite
@@ -48,7 +52,10 @@ pharmguard/
     ├── test_tracker.py             # ByteTrack ID consistency & recovery tests
     ├── test_behavior.py            # Spatial ROI, dwell time, & rapid retreat tests
     ├── test_alerts.py              # Cooldown throttling & persistence tests
-    └── test_pipeline.py            # End-to-end vision pipeline integration tests
+    ├── test_pipeline.py            # End-to-end vision pipeline integration tests
+    ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
+    ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip
+    └── conftest.py                 # Redirects alert log so tests never touch logs/
 ```
 
 ---
@@ -88,10 +95,13 @@ python benchmark.py
 1. **Modular Architecture**: Keep functional boundaries clean. Do NOT combine UI, tracking, and detection logic into a single file.
 2. **Abstract Detectors**: All detection backends must inherit from `BaseDetector` in `pharmaguard/detector.py`. This ensures we can switch to Apache 2.0 models (e.g. RT-DETR) without modifying downstream trackers.
 3. **Normalized Coordinates**: Always represent visual zones and regions of interest (ROI) in normalized floats `[0.0, 1.0]` so they remain resolution-independent across varying webcam cameras.
-4. **Feet Ground Contact for Spatial Intersections**: Test spatial zone occupancy against the bottom center of the bounding box `((x1+x2)/2, y2)` rather than the geometric center to prevent false hits when a person's upper body leans across a boundary.
+4. **Feet Ground Contact for Spatial Intersections**: Test spatial zone occupancy against the bottom center of the bounding box `((x1+x2)/2, y2)` rather than the geometric center to prevent false hits when a person's upper body leans across a boundary. *Applies to full-body CCTV views only.* With the laptop webcam facing a mock shelf, feet are usually out of frame, so shelf interaction must be judged from hand/wrist positions (Priority 3).
 5. **Alert Throttling**: Never emit unthrottled alert streams. Every security alert candidate must pass through `AlertManager.process_behavior_events()` with an enforceable cooldown window.
 6. **No Silent Changes**: Whenever schemas, thresholds, or dependencies change, update `PROJECT_STATUS.md` and `TECHNICAL_DECISIONS.md`.
 7. **Type Annotations**: Use Python type hints throughout all modules. Validate dataclasses or Pydantic models for configuration.
+8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer).
+9. **Measurement honesty**: never print or document a metric that was not measured (e.g. hard-coded "dropped frames"). Label compute-only vs end-to-end figures explicitly.
+10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG`.
 
 ---
 

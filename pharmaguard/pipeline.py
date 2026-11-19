@@ -6,6 +6,8 @@ alert generation, fine-grained telemetry measurement, and visual annotation.
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Any
+import logging
+import threading
 import time
 import numpy as np
 import cv2
@@ -18,6 +20,28 @@ from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
 from pharmaguard.alerts import AlertManager, SecurityAlert
 from pharmaguard.events import EventManager, SystemEvent
 from pharmaguard.annotator import SecurityAnnotator
+from pharmaguard.telemetry import StreamTelemetry, TelemetrySnapshot
+
+logger = logging.getLogger(__name__)
+
+
+def normalize_frame(frame: np.ndarray, max_width: int) -> np.ndarray:
+    """Coerce any browser frame to 3-channel RGB uint8 no wider than ``max_width``.
+
+    Downscaling here bounds detection, annotation, and (most importantly) return-encoding cost,
+    independent of whatever resolution the browser decided to capture.
+    """
+    if frame.ndim == 2:
+        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+    elif frame.shape[2] == 4:
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2RGB)
+    if frame.dtype != np.uint8:
+        frame = np.clip(frame, 0, 255).astype(np.uint8)
+    h, w = frame.shape[:2]
+    if w > max_width:
+        new_h = max(1, int(round(h * max_width / w)))
+        frame = cv2.resize(frame, (max_width, new_h), interpolation=cv2.INTER_AREA)
+    return frame
 
 
 @dataclass
@@ -53,8 +77,12 @@ class PharmaGuardPipeline:
         self.annotator = SecurityAnnotator(self.config.display)
 
         # Performance & Timing Metrics
-        self._frame_times: List[float] = []
-        self._last_frame_ts: float = time.time()
+        self.telemetry = StreamTelemetry(
+            window=self.config.stream.telemetry_window,
+            signal_timeout_sec=self.config.stream.signal_timeout_sec,
+        )
+        self._lock = threading.Lock()
+        self.last_output: Optional["PipelineOutput"] = None
         self.fps: float = 0.0
         self.latency_ms: float = 0.0
         self.frame_counter: int = 0
@@ -86,18 +114,18 @@ class PharmaGuardPipeline:
         Returns:
             PipelineOutput with annotated frame and monitoring metrics.
         """
-        start_time = time.perf_counter()
-        self.frame_counter += 1
-
         if frame_rgb is None or frame_rgb.size == 0:
-            return self._create_empty_output(start_time, "NO_SIGNAL")
+            return self._create_empty_output(time.perf_counter(), "NO_SIGNAL")
 
-        # Handle RGBA frames from web browser canvas/WebRTC if 4-channel
-        if len(frame_rgb.shape) == 3 and frame_rgb.shape[2] == 4:
-            frame_rgb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGBA2RGB)
-        elif len(frame_rgb.shape) == 2:
-            frame_rgb = cv2.cvtColor(frame_rgb, cv2.COLOR_GRAY2RGB)
+        with self._lock:
+            return self._process_locked(frame_rgb)
 
+    def _process_locked(self, frame_rgb: np.ndarray) -> PipelineOutput:
+        start_time = self.telemetry.mark_arrival()
+        self.frame_counter += 1
+        input_h, input_w = frame_rgb.shape[:2]
+
+        frame_rgb = normalize_frame(frame_rgb, self.config.stream.max_process_width)
         h, w = frame_rgb.shape[:2]
 
         # Convert to BGR for OpenCV processing & standard model input
@@ -150,23 +178,10 @@ class PharmaGuardPipeline:
         annotated_bgr = self.annotator.draw_shelf_zones(annotated_bgr, self.config.zones, zone_occupancy)
         annotated_bgr = self.annotator.draw_tracked_persons(annotated_bgr, tracking_result)
 
-        # Calculate FPS and latency
-        end_time = time.perf_counter()
-        self.latency_ms = (end_time - start_time) * 1000.0
+        # HUD shows the previous frame's measured figures (this frame's are not final yet).
+        tele = self.telemetry.snapshot()
+        self.fps = tele.delivered_fps
 
-        now = time.time()
-        delta = now - self._last_frame_ts
-        self._last_frame_ts = now
-        if delta > 0:
-            instant_fps = 1.0 / delta
-            self._frame_times.append(instant_fps)
-            if len(self._frame_times) > 30:
-                self._frame_times.pop(0)
-            self.fps = float(np.mean(self._frame_times))
-        else:
-            self.fps = 30.0
-
-        # Draw HUD overlay
         annotated_bgr = self.annotator.draw_hud(
             frame=annotated_bgr,
             fps=self.fps,
@@ -181,6 +196,9 @@ class PharmaGuardPipeline:
         # Convert back to RGB for browser/Gradio presentation
         annotated_rgb = cv2.cvtColor(annotated_bgr, cv2.COLOR_BGR2RGB)
 
+        self.latency_ms = self.telemetry.mark_return(start_time)
+        tele = self.telemetry.snapshot()
+
         self.last_stage_timings = {
             "detect_ms": round(detect_ms, 2),
             "track_ms": round(track_ms, 2),
@@ -190,7 +208,9 @@ class PharmaGuardPipeline:
         }
 
         metadata = {
+            "input_resolution": f"{input_w}x{input_h}",
             "resolution": f"{w}x{h}",
+            "telemetry": tele,
             "device": self.device,
             "model_name": self.model_name,
             "stage_timings": self.last_stage_timings,
@@ -198,17 +218,23 @@ class PharmaGuardPipeline:
             "frame_counter": self.frame_counter
         }
 
-        return PipelineOutput(
+        output = PipelineOutput(
             annotated_frame_rgb=annotated_rgb,
             fps=round(self.fps, 1),
             latency_ms=round(self.latency_ms, 1),
             active_tracks_count=len(tracking_result.active_ids),
-            active_ids=tracking_result.active_ids,
+            active_ids=list(tracking_result.active_ids),
             recent_alerts=self.alert_manager.get_recent_alerts(limit=10),
             recent_events=self.event_manager.get_recent(limit=15),
             connection_status="ONLINE",
             metadata=metadata
         )
+        self.last_output = output
+        return output
+
+    def telemetry_snapshot(self) -> TelemetrySnapshot:
+        """Thread-safe read of stream health for the dashboard poller."""
+        return self.telemetry.snapshot()
 
     def _create_empty_output(self, start_time: float, status: str) -> PipelineOutput:
         """Fallback when frame is invalid or dropped."""
@@ -229,8 +255,12 @@ class PharmaGuardPipeline:
 
     def reset_state(self) -> None:
         """Reset trackers and alerts for fresh session."""
-        self.tracker.reset()
-        self.alert_manager.clear()
-        self.event_manager.clear()
-        self._frame_times.clear()
-        self.frame_counter = 0
+        with self._lock:
+            self.tracker.reset()
+            self.alert_manager.clear()
+            self.event_manager.clear()
+            self.telemetry.reset()
+            self.last_output = None
+            self.frame_counter = 0
+            self.fps = 0.0
+            self.latency_ms = 0.0

@@ -40,6 +40,7 @@ We need to assign persistent IDs to people, maintain tracking through temporary 
    - *Mechanism*: Associates almost every detection box (both high-confidence and low-confidence detections) using Kalman filtering and bipartite matching. Low-confidence detections recover occluded individuals without introducing false positives.
    - *Pros*: High FPS (runs purely on bounding box geometry without heavy deep appearance feature extraction), low latency, minimal identity switches. Available with MIT license via `supervision`.
    - *Decision*: **Selected as the default multi-object tracker.**
+   - *Implementation status (audit 2026-11-19, corrected)*: the shipped tracker is a **hand-written IoU tracker**, not ByteTrack via `supervision` (never imported) and has **no Kalman filter**. Its low-confidence second stage is unreachable because the detector's 0.40 confidence floor is above the tracker's 0.35 split. It also switches IDs once per-frame motion exceeds ~55 px. Fixing this is Priority 2.
 
 2. **DeepSORT / BoT-SORT**
    - *Pros*: Uses deep ReID (Re-Identification) appearance embeddings.
@@ -56,7 +57,7 @@ The client runs on a laptop with a webcam. The compute backend runs in Google Co
 ### Options Evaluated
 1. **Gradio with `gr.Image(sources=['webcam'], streaming=True)` + Public Live Tunnel**
    - *Mechanism*: Gradio runs a FastAPI/WebSocket server in Colab. `demo.launch(share=True)` provides an encrypted public HTTPS tunnel (`https://xxxx.gradio.live`). Modern browsers strictly require HTTPS to grant webcam access.
-   - *Streaming Latency Optimization*: By default, Gradio throttles streaming to `stream_every=0.5` (2 FPS). We explicitly tuned `stream_every=0.04` (~25 FPS), disabled per-frame progress micro-spinners (`show_progress="hidden"`), and enabled WebSocket connection queuing (`demo.queue(default_concurrency_limit=2)`).
+   - *Streaming Latency Optimization*: By default, Gradio throttles streaming to `stream_every=0.5` (2 FPS). We set `stream_every=0.04` (a minimum capture spacing, not a delivered rate - see §5), disabled per-frame progress micro-spinners (`show_progress="hidden"`), and enabled WebSocket connection queuing (`demo.queue(default_concurrency_limit=2)`).
    - *Tunnel Security*: Added secure session authentication via `demo.launch(auth=...)` resolving credentials from Colab Secrets, environment variables (`PHARMAGUARD_AUTH_USER`/`PHARMAGUARD_AUTH_PASS`), or ephemeral runtime tokens to ensure unauthorized web crawlers cannot access the live pharmacy surveillance stream. Hardcoded credentials are strictly prohibited.
    - *Pros*: Zero client installation required on the laptop—any browser can open the link, click "Allow Camera", and stream frames to Colab. Includes integrated UI components for telemetry and controls.
    - *Decision*: **Selected for the primary architecture.**
@@ -83,3 +84,59 @@ Rather than using the geometric center of the bounding box (which floats at tors
 
 ### Temporal State Tracking
 Each tracked person maintains an accumulated dwell timer. When dwell time exceeds the configured threshold (default: 8.0s), an alert is triggered. To prevent alert storms, an alert cooldown mechanism (default: 10.0s) throttles repeat alerts for the same track ID.
+
+---
+
+## 5. Real-Time Transport Decisions (2026-11-19, measured)
+
+All figures measured on the dev laptop (CPU only, Python 3.13, gradio 6.32.0, ultralytics 8.4.215). Colab GPU and
+real-tunnel figures are still **pending a live run**.
+
+### 5.1 How Gradio actually paces webcam streaming
+Read from the shipped frontend bundle: the webcam component runs
+`setInterval(() => { if (!pending) capture() }, stream_every)`. A new frame is captured **only when the previous
+one has completed**, so frames never queue on the server and latency cannot grow without bound. Consequences:
+- `stream_every=0.04` is a minimum spacing, **not** "25 FPS". Delivered FPS = 1 / (round-trip time).
+- The spacing of frame **arrivals at the server** equals the full browser->server->browser cycle. `pharmaguard/telemetry.py`
+  measures end-to-end FPS and latency **on the server** without client clock sync (valid for one streaming client).
+
+### 5.2 Return-frame encoding: JPEG, not Gradio's default WebP
+Gradio's `gr.Image.postprocess` cost per annotated frame:
+
+| Format | 1280x720 | 640x360 |
+|---|---|---|
+| WebP (Gradio default) | 527 ms | 112 ms |
+| PNG | 219 ms | 55 ms |
+| **JPEG (chosen)** | **13 ms** | **6 ms** |
+
+### 5.3 Capture size: request 640x480 from the browser, downscale on the server
+With no constraints, Gradio requests **1920x1440** from `getUserMedia` and uploads each frame as JPEG q0.8. We pass
+`WebcamOptions(constraints={"video": {"width": {"ideal": 640}, "height": {"ideal": 480}}})` and additionally
+downscale anything wider than `stream.max_process_width` (default 640) server-side. Zones are normalised,
+so behaviour logic is resolution-independent.
+
+### 5.4 Image-only per-frame event; panels on a 1 Hz timer
+The stream event previously returned 8 outputs including two HTML blobs every frame. It now returns only the
+annotated image. Telemetry/alert panels refresh from a `gr.Timer(1.0)`, and unchanged HTML is skipped (`gr.skip()`).
+
+### 5.5 Measured effect (localhost, CPU, real photo with 4 people, 1280x720 uploaded frames)
+
+| Configuration | E2E p50 | E2E p95 | Sustained FPS |
+|---|---|---|---|
+| Previous path (WebP, no downscale) | 553 ms | 650 ms | 1.8 |
+| New defaults (JPEG, downscale to 640) | **190 ms** | **215 ms** | **5.3** |
+
+Measured with `tools/e2e_benchmark.py`, which reproduces the browser's four HTTP exchanges per frame
+(upload, submit, result stream, download) on one persistent connection. `gradio_client` was **rejected** as a
+measurement tool: it opens new connections per call, and each new `httpx` connection costs ~640 ms on the
+dev laptop (pooled: 3 ms), which inflated round trips to ~2.6 s that no browser pays.
+
+### 5.6 Privacy defaults
+`GRADIO_ANALYTICS_ENABLED=False` is set before Gradio is imported: at startup Gradio was observed contacting
+`huggingface.co` and `api.gradio.app`. The `gradio.live` share relay still carries video through third-party
+infrastructure, so it is restricted to staged footage of consenting participants.
+
+### 5.7 Dependency pins
+`gradio==6.32.0` and `ultralytics==8.4.215` are pinned exactly to the tested set. The previous pins
+(`gradio<=5.6.0`, `ultralytics<=8.3.40`) had never been installed or tested together. `supervision`/`lap` were
+removed (unused) and `scipy` was added (imported directly). torch is left unpinned so Colab keeps its CUDA build.

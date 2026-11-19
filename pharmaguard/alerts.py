@@ -9,10 +9,13 @@ from datetime import datetime
 from typing import List, Dict, Optional
 import os
 import json
+import logging
 import time
 
 from pharmaguard.config import AlertConfig
 from pharmaguard.behavior import BehaviorEvent, BehaviorEventType
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -118,8 +121,9 @@ class AlertManager:
         try:
             with open(self.config.alert_log_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(alert.to_dict()) + "\n")
-        except Exception:
-            pass  # Non-fatal log failure
+        except OSError as exc:
+            # Non-fatal for the live stream, but must never be silent: it means evidence is being lost.
+            logger.warning("Failed to persist alert %s to %s: %s", alert.alert_id, self.config.alert_log_file, exc)
 
     def get_recent_alerts(self, limit: int = 15) -> List[SecurityAlert]:
         """Return the most recent alerts for UI presentation."""

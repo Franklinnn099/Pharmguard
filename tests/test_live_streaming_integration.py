@@ -152,39 +152,57 @@ def test_annotated_video_and_hud_output():
     assert np.mean(hud_region) > 0
 
 
+def _find_fn(demo, name):
+    for fn in demo.fns.values():
+        if getattr(fn.fn, "__name__", "") == name:
+            return fn.fn
+    raise AssertionError(f"{name} not registered in Gradio Blocks")
+
+
 def test_gradio_ui_webcam_stream_integration():
-    """TEST 1 & 7: Verify Gradio Blocks interface processes webcam frames and returns complete UI payload."""
+    """Stream handler returns only the annotated frame; the 1 Hz poller returns the panel payload."""
     config = PharmaGuardConfig()
     pipeline = PharmaGuardPipeline(config)
     demo = create_pharmaguard_ui(pipeline, config)
 
-    # Find the stream processing function inside the Gradio Blocks dependencies
-    stream_fn = None
-    for fn in demo.fns.values():
-        if "process_webcam_stream" in getattr(fn.fn, "__name__", ""):
-            stream_fn = fn.fn
-            break
+    stream_fn = _find_fn(demo, "process_webcam_stream")
+    refresh_fn = _find_fn(demo, "refresh_dashboard")
 
-    assert stream_fn is not None, "Gradio webcam stream handler not found in Blocks demo"
+    # Before any frame: STANDBY.
+    status, *_ = refresh_fn({})
+    assert "STANDBY" in status
 
-    # Test stream_fn with a valid frame
-    test_frame = create_synthetic_frame(640, 480)
-    result = stream_fn(test_frame)
+    annotated = stream_fn(create_synthetic_frame(640, 480))
+    assert isinstance(annotated, np.ndarray) and annotated.shape == (480, 640, 3)
+    annotated = stream_fn(create_synthetic_frame(640, 480))
 
-    assert len(result) == 8
-    annotated_rgb, status_txt, tracked_cnt, active_ids, fps_txt, latency_txt, alerts_html, events_html = result
+    status, tracked, ids, fps_txt, latency_txt, alerts_html, events_html, cache = refresh_fn({})
+    assert status.startswith("LIVE")
+    assert "server" in latency_txt and "cycle" in latency_txt
+    assert "No active security alerts" in alerts_html
+    # Unchanged HTML is skipped on the next poll (no needless re-render).
+    *_, alerts2, events2, _ = refresh_fn(cache)
+    assert not isinstance(alerts2, str) and not isinstance(events2, str)
 
-    assert isinstance(annotated_rgb, np.ndarray)
-    assert annotated_rgb.shape == (480, 640, 3)
-    assert "ONLINE" in status_txt
-    assert isinstance(fps_txt, str)
-    assert isinstance(latency_txt, str)
-    assert "<div" in alerts_html or "No active security alerts" in alerts_html
+    # Stream pause (None) yields a standby frame, not a crash.
+    standby = stream_fn(None)
+    assert isinstance(standby, np.ndarray)
 
-    # Test stream_fn with None (simulating stream pause)
-    result_none = stream_fn(None)
-    assert len(result_none) == 8
-    assert "STANDBY" in result_none[1]
+
+def test_ui_transport_configuration():
+    """Guards the two measured transport fixes: JPEG return encoding and a 640x480 capture request."""
+    config = PharmaGuardConfig()
+    pipeline = PharmaGuardPipeline(config)
+    demo = create_pharmaguard_ui(pipeline, config)
+    cfg = demo.get_config_file()
+    images = {c["props"].get("label"): c["props"] for c in cfg["components"] if c.get("type") == "image"}
+    out = images["2. PharmaGuard annotated output"]
+    cam = images["1. Camera input (click to start webcam)"]
+    assert out["format"] == "jpeg"
+    assert cam["streaming"] is True
+    assert cam["webcam_options"]["constraints"]["video"]["width"] == {"ideal": 640}
+    api_names = {d.get("api_name") for d in cfg["dependencies"]}
+    assert {"stream_frame", "process_frame", "refresh_dashboard"} <= api_names
 
 
 def test_gradio_live_server_execution():

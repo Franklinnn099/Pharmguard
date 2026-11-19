@@ -1,111 +1,84 @@
 # PharmaGuard — Project Status Report
 
-**Current Date**: November 17, 2026  
-**Milestone Target**: December 1, 2026 (Live Demonstration)  
-**Version**: 0.1.1  
-**Test Suite Status**: 20/20 Passing Automated Tests (14 core unit + 6 live streaming & server integration tests)
+**Last updated**: 2026-11-19 (Claude Code takeover; branch `p1-streaming-pipeline`)
+**Milestone**: December 1, 2026 live demonstration
+**Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
+**Test suite**: 31 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+
+> Every item below is marked by how it was verified. "Unverified" means it was not executed.
+> The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
 
 ---
 
-## 1. Verified vs. Unverified Capabilities
+## 1. Verified (executed in this repository)
 
-### Genuinely Verified & Tested (Pass 19/19)
-- [x] **Webcam Ingestion & Stream Disconnect Recovery**: Verified that the Gradio stream callback consumes RGB/RGBA webcam frames, handles `None` input during stream pause/disconnection without crashing, and smoothly resumes upon reconnection.
-- [x] **Multi-Person Tracking Consistency**: Verified that multiple distinct individuals receive unique tracking IDs (e.g. ID #1 and ID #2) and maintain persistent identities during movement without identity switches.
-- [x] **Shelf Zone Spatial Interaction**: Verified 2D normalized polygon boundaries (`Prescription_Shelf_A`) and bottom-center ground contact points for accurate floor projection.
-- [x] **Behavioral Sequence & Dwell Time Calculation**: Verified `ZONE_ENTER`, dwell time accumulation, `SUSPICIOUS_LOITERING` alert emission when dwell threshold (default 8.0s) is exceeded, and `RAPID_RETREAT` alert emission for abrupt exits (0.5–2.5s).
-- [x] **Alert Cooldown Throttling**: Verified that repeat alerts for the same track ID within the cooldown window (default 10.0s) are suppressed to avoid operator flooding, and logged to JSONL.
-- [x] **Visual Annotations & Top HUD**: Verified that shelf polygons, bounding boxes, dwell badges, motion trails, and real-time operational telemetry (FPS, Latency, Connection Status, Track Count) are rendered accurately into RGB frames.
-- [x] **Fine-Grained Stage Latency Instrumentation**: Pipeline output measures and returns individual stage latencies (`detect_ms`, `track_ms`, `behavior_ms`, `annotate_ms`, `total_backend_ms`).
-- [x] **Gradio Low-Latency Streaming Configuration**: Fixed the default Gradio 0.5s (2 FPS) bottleneck by configuring `stream_every=0.04` (~25 FPS), `show_progress="hidden"`, and enabling WebSocket queueing via `demo.queue()`.
+| Capability | How verified |
+|---|---|
+| Real HTTP frame round trip (upload → pipeline → JPEG → download) | `tests/test_stream_pipeline.py::test_live_server_http_round_trip_returns_annotated_jpeg` + `tools/e2e_benchmark.py` against a local server |
+| Person detection on real imagery | Sample photo: ≥2 people detected and tracked (`test_pipeline_on_real_people_image_downscaled`) |
+| Server-side downscale of HD frames to 640 wide | Unit tests (RGB/RGBA/grey 1280x720 → 640x360) |
+| End-to-end FPS/latency telemetry and NO SIGNAL detection | Deterministic fake-clock tests; displayed on dashboard |
+| JPEG return + 640x480 capture request served to browser | `test_ui_transport_configuration` inspects the served Gradio config |
+| Tests no longer write to `logs/pharmaguard_alerts.jsonl` | Byte-compared before/after a full test run |
+| Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
+| Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
 
-### Awaiting Live User Colab Runtime Execution
-- [ ] **Physical Colab GPU Webcam Session**: The code and turnkey notebook `colab/PharmaGuard_Colab.ipynb` are prepared for the user to execute on Colab GPU with their physical laptop webcam. Actual GPU latency (expected 15–25ms on NVIDIA T4/L4) must be recorded during the live Colab run.
+## 2. Measured performance (dev laptop, CPU only — NOT the demo hardware)
 
-### Incomplete / Future Product Roadmap
-- [ ] **Pose / Wrist Keypoint Estimation**: Validating physical reaching into shelf volume using YOLO-Pose keypoints.
-- [ ] **Concealment Recognition**: Detection of pocketing or bagging sequences.
-- [ ] **Multi-Camera Aisle Hand-off**: Cross-camera re-identification.
+**Server compute** (`python benchmark.py`, sample photo, 1280x720 in → 640x360 processed, ~3.9 detections/frame):
 
----
+| Stage | p50 ms | p95 ms |
+|---|---|---|
+| detect (YOLOv8n, imgsz 640) | 82.4 | 123.5 |
+| track | 0.3 | 0.4 |
+| behaviour | 0.1 | 0.1 |
+| annotate | 3.5 | 4.2 |
+| JPEG return encode | 5.1 | 8.8 |
+| **total** | **93.7** | **137.2** |
 
-## 2. Issues Discovered & Fixed During Audit
+The `--imgsz 416 --max-width 480` variant gives a total p50 of 55.8 ms.
 
-1. **Gradio Streaming Rate Bottleneck**: `gr.Image.stream()` defaulted to `stream_every=0.5` (2 FPS) with progress spinners. Fixed by explicitly setting `stream_every=0.04` (~25 FPS), `show_progress="hidden"`, and `concurrency_limit=1`.
-2. **WebSocket Queueing**: Added `demo.queue(default_concurrency_limit=2)` to `app.py` to prevent HTTP polling stalls during video streaming.
-3. **RGBA 4-Channel Stream Compatibility**: Browser canvas and WebRTC streams occasionally deliver 4-channel RGBA numpy arrays. Added an automatic format converter in `pipeline.py` to normalize RGBA/Grayscale to 3-channel RGB.
-4. **Stream Pause / Disconnection Handling**: When webcam is stopped or paused in the browser, Gradio sends `None`. Fixed `process_webcam_stream` in `ui.py` to return a clean `STANDBY` state with zero active tracks, preventing crash or stale state.
-5. **Dashboard Security / Authentication**: Added secure authentication resolution in `app.py` leveraging Colab Secrets (`PHARMAGUARD_AUTH_USER`/`PHARMAGUARD_AUTH_PASS`), environment variables, or cryptographically generated ephemeral session tokens to secure the public HTTPS Gradio link without hardcoded passwords.
-6. **Colab Directory & Dependency Robustness**: Updated `colab/PharmaGuard_Colab.ipynb` and `colab/setup_colab.sh` to handle workspace paths dynamically and ensure pre-cached weights and clean imports.
+**End-to-end round trip on localhost** (`tools/e2e_benchmark.py`, 1280x720 frames uploaded):
 
----
+| Configuration | p50 | p95 | Sustained FPS |
+|---|---|---|---|
+| Previous transport (WebP, no downscale) | 553 ms | 650 ms | 1.8 |
+| Current defaults | 190 ms | 215 ms | 5.3 |
 
-## 3. Actual Benchmark Measurements
+Localhost has no network latency. Over the `gradio.live` tunnel, each frame makes 4 HTTP exchanges, and each one adds a network round trip.
 
-Measured via `benchmark.py` across 50 frames (640x480 resolution):
+## 3. Awaiting a live Colab run (requires the project owner; cannot be done from the dev machine)
 
-| Metric | Measured Value (Host CPU) | Projected Colab GPU (NVIDIA T4/L4) |
-| :--- | :--- | :--- |
-| **Stage 1: YOLO Person Detection** | 105.54 ms | ~5–8 ms |
-| **Stage 2: ByteTrack MOT** | 0.01 ms | <0.05 ms |
-| **Stage 3: Shelf Behavior & Dwell** | 0.02 ms | <0.05 ms |
-| **Stage 4: Visual HUD & Overlays** | 1.92 ms | ~1.5 ms |
-| **Total Mean Backend Latency** | **107.86 ms** | **~7–10 ms** |
-| **P95 Backend Latency** | 118.88 ms | ~12–15 ms |
-| **Backend Processing Throughput** | 9.3 FPS (CPU limited) | >80 FPS (Engine capable) |
-| **Target Browser Streaming Rate** | ~25 FPS (`stream_every=0.04`) | ~25 FPS (`stream_every=0.04`) |
-| **Dropped Frames** | 0 / 50 | 0 |
+- [ ] Run `colab/PharmaGuard_Colab.ipynb` on a T4 GPU and record the `benchmark.py` table here.
+- [ ] Stream the laptop webcam through `gradio.live`, then record the dashboard's Delivered FPS, Displayed FPS, cycle p50/p95, and server ms.
+- [ ] Run `python tools/e2e_benchmark.py --url <share-url> --user … --password …` from the laptop and record the output.
+- [ ] Confirm the share URL and the generated password are visible in the launch cell output (launch now uses `!python main.py`).
+- [ ] Stop and restart the webcam: confirm NO SIGNAL appears within ~2 s and the stream recovers.
 
----
+## 4. Known defects (open)
 
-## 4. Current Architecture
+| Ref | Defect | Planned |
+|---|---|---|
+| F1/F4 | Tracker's low-confidence stage is unreachable; IDs switch above ~55 px/frame motion; no Kalman filter | Priority 2 |
+| B4 | Zone rule uses feet; a webcam facing a shelf cannot trigger zones | Priority 3 (hand/wrist via pose) |
+| B1–B3 | Walking past triggers RAPID RETREAT; one dwell incident re-alerts every 10 s; two shoppers produce 9 alerts in 30 s | Priority 3/4 |
+| B5 | With multiple zones, all zones show OCCUPIED when any one is occupied | Priority 3 |
+| R8 | One pipeline is shared by all sessions; two simultaneous streams corrupt tracker state | Before demo: single-operator lock |
+| — | No audible alarm, acknowledgement, event database, evidence clips, or zone editor | Priorities 4–6 |
 
-```
-[ Laptop Webcam ]
-        │  (Browser WebRTC / WebSocket Stream at 25 FPS)
-        ▼
-[ Gradio UI Client ]
-        │  (Encrypted HTTPS Live Tunnel: https://xxxx.gradio.live)
-        ▼
-[ Google Colab GPU Cloud Runtime ]
-        │
-        ├─► [ BaseDetector / YOLODetector ] (YOLOv8 / RT-DETR)
-        │         │
-        │         ▼ (Detections: xyxy, conf, class=person)
-        │
-        ├─► [ ByteTrackerWrapper ] (Two-Stage Hungarian Matching)
-        │         │
-        │         ▼ (Persistent Tracks: IDs, Trajectories, Centroids)
-        │
-        ├─► [ PharmacyBehaviorAnalyzer ] (Polygon ROI Dwell & Velocity)
-        │         │
-        │         ▼ (Behavior Events: Loitering, Rapid Retreat)
-        │
-        ├─► [ AlertManager & EventManager ] (Throttling, Severity, Audit Logs)
-        │         │
-        │         ▼ (Security Alerts, Ring Buffer)
-        │
-        ├─► [ SecurityAnnotator ] (Overlays, Zones, Trails, Telemetry HUD)
-        │
-        ▼
-[ Rendered Annotated Video + Telemetry Stream returned to Browser ]
-```
+## 5. Next priorities
 
----
+1. **Owner:** live Colab run (Section 3). This produces the first real GPU and tunnel numbers.
+2. **Priority 2 — tracking:** fix the threshold overlap, adopt ByteTrack-standard gating with a Kalman filter, a time-based lost buffer and two-frame activation; add crossing and occlusion tests.
+3. **Priority 3 — behaviour:** pose-based hand-in-shelf detection, bag/pocket regions, an incident state machine with scoring, and one alarm per incident.
 
-## 5. How to Run the Application
+## 6. How to run
 
-### Google Colab GPU Execution (Live Cloud Demonstration)
-1. Open `colab/PharmaGuard_Colab.ipynb` in [Google Colab](https://colab.research.google.com).
-2. Set runtime to GPU: **Runtime > Change runtime type > T4 GPU**.
-3. Run all cells in order.
-4. Click the public **`https://xxxx.gradio.live`** link generated in Step 6.
-5. In your laptop browser, click **Webcam** on the left panel and click **Allow**.
-6. Live surveillance starts streaming immediately with GPU inference!
-
-### Local Workstation Execution
 ```powershell
 python -m pytest tests/ -v
-python main.py --local --port 7860
+python main.py --local --port 7860            # http://127.0.0.1:7860
+python benchmark.py                           # server compute
+python tools/e2e_benchmark.py --url http://127.0.0.1:7860
 ```
-Open `http://127.0.0.1:7860` in any web browser.
+
+For Colab, see `colab/PharmaGuard_Colab.ipynb` (Sections 7–9).

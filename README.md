@@ -3,8 +3,7 @@
 > Real-time suspicious-interaction monitoring system designed for pharmacies. Captures live webcam feeds, tracks individuals with persistent IDs, monitors sensitive medicine shelves, flags suspicious behavioral sequences, and presents actionable telemetry to security staff.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests: Passing](https://img.shields.io/badge/tests-20%2F20%20passing-brightgreen.svg)]()
+> **Licence note:** no project licence has been chosen yet. Ultralytics YOLO is AGPL-3.0 (see TECHNICAL_DECISIONS.md §1).
 [![Hardware: CPU%2FCUDA](https://img.shields.io/badge/Compute-CUDA%20%7C%20CPU-orange.svg)]()
 
 ---
@@ -40,7 +39,7 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 ## Key Capabilities
 
 - **Real-Time Person Detection**: Pretrained YOLO inference filtering for person detections with configurable confidence and IoU thresholds.
-- **Multi-Object Tracking (ByteTrack)**: Robust two-stage association combining high-confidence and low-confidence detections to maintain track continuity across temporary occlusions.
+- **Multi-Object Tracking**: IoU-based tracker with persistent IDs (ByteTrack-style; known limitations listed in PROJECT_STATUS.md §4).
 - **Configurable Shelf Zones**: Resolution-independent normalized 2D polygons representing monitored pharmacy shelves (e.g. narcotics or restricted medicine racks).
 - **Behavioral Sequence Recognition**:
   - `SUSPICIOUS_LOITERING`: Detects when an individual lingers near sensitive stock beyond the alert dwell threshold (default: 8.0s).
@@ -61,7 +60,7 @@ PharmaGuard employs a **cloud-assisted architecture** allowing lightweight clien
 4. Open the generated public HTTPS URL (e.g., `https://xxxx.gradio.live`) on your laptop browser.
 5. Click **Allow** when the browser asks for webcam permission to begin live surveillance!
 
-### Option 2: Running Locally on Windows / macOS / Linux
+### Option 2: Running Locally on Windows / macOS / Linux (CPU works; ~5 FPS measured on a laptop CPU)
 
 ```powershell
 # 1. Clone repository & enter workspace
@@ -83,52 +82,36 @@ Then visit `http://127.0.0.1:7860` in your web browser.
 
 ## Testing & Verification
 
-PharmaGuard includes a 100% automated test suite validating each pipeline stage:
+The automated test suite covers each pipeline stage, the Gradio handlers, and a real HTTP frame round trip through a live local server:
 
 ```powershell
 python -m pytest tests/ -v
 ```
 
-Output:
-```
-tests/test_alerts.py::test_alert_generation_and_cooldown PASSED
-tests/test_alerts.py::test_info_severity_suppression PASSED
-tests/test_behavior.py::test_behavior_analyzer_zone_entry_and_exit PASSED
-tests/test_config.py::test_default_config_initialization PASSED
-tests/test_config.py::test_yaml_serialization_deserialization PASSED
-tests/test_detector.py::test_detector_initialization PASSED
-tests/test_detector.py::test_detector_inference_on_empty_frame PASSED
-tests/test_detector.py::test_detector_inference_on_synthetic_frame PASSED
-tests/test_pipeline.py::test_pipeline_end_to_end_synthetic_frame PASSED
-tests/test_pipeline.py::test_pipeline_reset_state PASSED
-tests/test_tracker.py::test_tracker_initialization PASSED
-tests/test_tracker.py::test_tracker_empty_update PASSED
-tests/test_tracker.py::test_tracker_tracking_consistency PASSED
-tests/test_tracker.py::test_tracker_reset PASSED
-============================= 14 passed in 12.75s ==============================
-```
+Current results and measured performance are tracked in [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
-To run the pipeline throughput benchmark:
+To benchmark:
 ```powershell
-python benchmark.py
+python benchmark.py                                   # server compute, incl. return-frame encoding
+python tools/e2e_benchmark.py --url http://127.0.0.1:7860   # browser-equivalent HTTP round trip
 ```
 
 ---
 
 ## Project Documentation
 
-- [PROJECT_STATUS.md](file:///C:/Users/USER/Desktop/pharmguard/PROJECT_STATUS.md): Complete list of completed features, incomplete features, known issues, and next priorities.
-- [TECHNICAL_DECISIONS.md](file:///C:/Users/USER/Desktop/pharmguard/TECHNICAL_DECISIONS.md): In-depth architectural trade-off evaluations and model licensing assessment.
-- [CLAUDE.md](file:///C:/Users/USER/Desktop/pharmguard/CLAUDE.md): Contributor guide and conventions for human and AI engineers.
+- [PROJECT_STATUS.md](PROJECT_STATUS.md): Complete list of completed features, incomplete features, known issues, and next priorities.
+- [TECHNICAL_DECISIONS.md](TECHNICAL_DECISIONS.md): In-depth architectural trade-off evaluations and model licensing assessment.
+- [CLAUDE.md](CLAUDE.md): Contributor guide and conventions for human and AI engineers.
 
 ---
 
 ## Target Roadmap to December 1, 2026
 
-- [x] Cloud-assisted browser-to-Colab-to-browser webcam streaming foundation.
+- [x] Browser-to-server-to-browser streaming verified locally; Colab GPU run pending.
 - [x] Pretrained YOLO person detection.
-- [x] Two-stage ByteTrack multi-person tracking with persistent IDs.
-- [x] Pharmacy shelf zone dwell time & rapid retreat analysis.
+- [ ] Robust multi-person tracking (ByteTrack-standard gating, Kalman, occlusion).
+- [ ] Shelf interaction analysis for webcam-facing-shelf setup (hands, bag/pocket, scoring).
 - [x] Actionable alerts and professional security console UI.
 - [ ] Pose estimation / hand-in-shelf keypoint validation.
 - [ ] Commercial Apache 2.0 model validation (`rtdetr-l.pt`).

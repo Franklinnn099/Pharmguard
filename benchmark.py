@@ -1,116 +1,132 @@
 """
-Performance and latency benchmark script for PharmaGuard.
-Evaluates end-to-end processing throughput and fine-grained stage breakdown
-across Detection, Tracking, Behavior Analysis, and Visual Annotation.
+Server-side pipeline benchmark for PharmaGuard (compute only - no network).
+
+Measures every per-frame stage the server performs, INCLUDING the return-frame encoding that Gradio
+does after our handler returns (previously unmeasured, and the dominant cost with WebP):
+
+    downscale -> detect -> track -> behaviour -> annotate -> Gradio output encode
+
+Input is a real photo containing people (Ultralytics' bus.jpg) or any video file via --video, so
+tracking/behaviour timings reflect actual detections rather than empty frames.
+
+For the full browser-equivalent round trip (upload + network + download) use tools/e2e_benchmark.py.
+
+    python benchmark.py                       # sample photo, 1280x720 input
+    python benchmark.py --video staged.mp4    # recorded staged scenario
+    python benchmark.py --imgsz 480 --max-width 480
 """
 
+import argparse
+import os
+import statistics
 import time
-import numpy as np
+
+os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
+
 import cv2
+import numpy as np
 import torch
 
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.pipeline import PharmaGuardPipeline
 
 
-def run_benchmark(num_frames: int = 50, width: int = 640, height: int = 480):
-    print("=" * 70)
-    print("🛡️  PHARMAGUARD FULL-STACK PIPELINE LATENCY & FPS BENCHMARK")
-    print(f"Frames: {num_frames} | Input Resolution: {width}x{height}")
-    print("=" * 70)
+def load_frames(video: str | None, width: int, height: int, count: int) -> list[np.ndarray]:
+    """RGB frames from a video, or the sample photo with a slight pan."""
+    frames: list[np.ndarray] = []
+    if video:
+        cap = cv2.VideoCapture(video)
+        while len(frames) < count:
+            ok, f = cap.read()
+            if not ok:
+                break
+            frames.append(cv2.cvtColor(cv2.resize(f, (width, height)), cv2.COLOR_BGR2RGB))
+        cap.release()
+        if not frames:
+            raise SystemExit(f"Could not read frames from {video}")
+    else:
+        import ultralytics
+        img = cv2.imread(os.path.join(os.path.dirname(ultralytics.__file__), "assets", "bus.jpg"))
+        base = cv2.cvtColor(cv2.resize(img, (width, height)), cv2.COLOR_BGR2RGB)
+        frames = [np.roll(base, int(8 * np.sin(i / 6.0)), axis=1) for i in range(count)]
+    return frames
+
+
+def p(values: list[float], q: float) -> float:
+    return float(np.percentile(values, q)) if values else 0.0
+
+
+def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, video: str | None = None,
+                  imgsz: int | None = None, max_width: int | None = None, output_format: str | None = None) -> dict:
+    import gradio as gr
 
     config = PharmaGuardConfig()
+    config.alert.alert_log_file = None  # benchmarking must not write audit records
+    if imgsz:
+        config.detector.imgsz = imgsz
+    if max_width:
+        config.stream.max_process_width = max_width
+    if output_format:
+        config.stream.output_format = output_format
+
     pipeline = PharmaGuardPipeline(config)
+    encoder = gr.Image(type="numpy", format=config.stream.output_format)  # exactly what the UI uses
+    device = f"GPU: {torch.cuda.get_device_name(0)}" if torch.cuda.is_available() else f"CPU (torch {torch.__version__})"
 
-    device_name = "CPU"
-    if torch.cuda.is_available():
-        device_name = f"GPU: {torch.cuda.get_device_name(0)}"
-    else:
-        device_name = f"Host CPU (torch {torch.__version__})"
+    frames = load_frames(video, width, height, num_frames + 5)
+    for f in frames[:5]:  # warm-up (CUDA kernels, allocator, encoder)
+        encoder.postprocess(pipeline.process_frame(f).annotated_frame_rgb)
 
-    print(f"\nExecution Target: {device_name}")
-    print(f"Vision Model:     {pipeline.model_name}")
-    print(f"Tracking Engine:  ByteTrack (Two-stage Hungarian matching)")
-
-    # Warmup
-    print("\nWarming up inference pipeline...")
-    dummy = np.zeros((height, width, 3), dtype=np.uint8)
-    pipeline.process_frame(dummy)
-
-    latencies_total = []
-    latencies_det = []
-    latencies_trk = []
-    latencies_beh = []
-    latencies_ann = []
-
-    print(f"Running benchmark on {num_frames} frames with moving target...")
-    for i in range(num_frames):
-        frame = np.full((height, width, 3), 40, dtype=np.uint8)
-        # Simulate moving object across frame
-        cx = int(80 + (i * 9) % (width - 200))
-        cy = int(80 + (i * 5) % (height - 200))
-        cv2.rectangle(frame, (cx, cy), (cx + 80, cy + 170), (220, 220, 220), -1)
-
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+    stages: dict[str, list[float]] = {k: [] for k in ("detect", "track", "behavior", "annotate", "pipeline", "encode", "total")}
+    detections: list[int] = []
+    for f in frames[5:]:
         t0 = time.perf_counter()
-        output = pipeline.process_frame(frame)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        out = pipeline.process_frame(f)
         t1 = time.perf_counter()
+        encoder.postprocess(out.annotated_frame_rgb)
+        t2 = time.perf_counter()
+        st = out.metadata["stage_timings"]
+        stages["detect"].append(st["detect_ms"])
+        stages["track"].append(st["track_ms"])
+        stages["behavior"].append(st["behavior_ms"])
+        stages["annotate"].append(st["annotate_ms"])
+        stages["pipeline"].append((t1 - t0) * 1000)
+        stages["encode"].append((t2 - t1) * 1000)
+        stages["total"].append((t2 - t0) * 1000)
+        detections.append(out.metadata["detections_count"])
 
-        latencies_total.append((t1 - t0) * 1000.0)
-        timings = output.metadata.get("stage_timings", {})
-        latencies_det.append(timings.get("detect_ms", 0.0))
-        latencies_trk.append(timings.get("track_ms", 0.0))
-        latencies_beh.append(timings.get("behavior_ms", 0.0))
-        latencies_ann.append(timings.get("annotate_ms", 0.0))
+    n = len(stages["total"])
+    print("=" * 72)
+    print("PHARMAGUARD SERVER-SIDE BENCHMARK (compute only; network NOT included)")
+    print("=" * 72)
+    print(f"Device            : {device}")
+    print(f"Model / imgsz     : {pipeline.model_name} / {config.detector.imgsz}"
+          f"{' (FP16)' if getattr(pipeline.detector, 'half', False) else ''}")
+    print(f"Input -> processed: {width}x{height} -> {out.metadata['resolution']}  "
+          f"(source: {'video ' + video if video else 'sample photo'})")
+    print(f"Return encoding   : {config.stream.output_format}")
+    print(f"Frames measured   : {n}   mean detections/frame: {statistics.mean(detections):.1f}")
+    print("-" * 72)
+    print(f"{'stage':<12}{'p50 ms':>10}{'p95 ms':>10}{'mean ms':>10}")
+    for k, v in stages.items():
+        print(f"{k:<12}{p(v, 50):>10.1f}{p(v, 95):>10.1f}{statistics.mean(v):>10.1f}")
+    print("-" * 72)
+    cap_fps = 1000.0 / statistics.mean(stages["total"])
+    print(f"Server compute ceiling: {cap_fps:.1f} FPS  (delivered FPS will be lower: add network RTTs)")
+    print("=" * 72)
 
-    avg_total = float(np.mean(latencies_total))
-    p95_total = float(np.percentile(latencies_total, 95))
-    p99_total = float(np.percentile(latencies_total, 99))
-
-    avg_det = float(np.mean(latencies_det))
-    avg_trk = float(np.mean(latencies_trk))
-    avg_beh = float(np.mean(latencies_beh))
-    avg_ann = float(np.mean(latencies_ann))
-
-    inference_fps = 1000.0 / avg_det if avg_det > 0 else 0
-    backend_fps = 1000.0 / avg_total if avg_total > 0 else 0
-
-    print("\n" + "=" * 70)
-    print("📊 BENCHMARK MEASUREMENTS & LATENCY BREAKDOWN")
-    print("=" * 70)
-    print(f"Hardware Compute Device:        {device_name}")
-    print(f"Model Architecture:             {pipeline.model_name}")
-    print(f"Frame Resolution:               {width}x{height} (3-channel RGB)")
-    print("-" * 70)
-    print(f"Stage 1: YOLO Person Detection: {avg_det:.2f} ms  (Inference Speed: {inference_fps:.1f} FPS)")
-    print(f"Stage 2: ByteTrack MOT:         {avg_trk:.2f} ms")
-    print(f"Stage 3: Shelf Behavior & Dwell:{avg_beh:.2f} ms")
-    print(f"Stage 4: Visual HUD & Overlays: {avg_ann:.2f} ms")
-    print("-" * 70)
-    print(f"Total Mean Backend Latency:     {avg_total:.2f} ms")
-    print(f"P95 Backend Latency:            {p95_total:.2f} ms")
-    print(f"P99 Backend Latency:            {p99_total:.2f} ms")
-    print(f"Effective Backend Throughput:   {backend_fps:.1f} FPS")
-    print(f"Dropped Frames:                 0 / {num_frames}")
-    print(f"Final Track State:              {output.active_tracks_count} active track(s)")
-    print("=" * 70)
-
-    return {
-        "device": device_name,
-        "model": pipeline.model_name,
-        "avg_total_ms": avg_total,
-        "p95_total_ms": p95_total,
-        "avg_det_ms": avg_det,
-        "avg_trk_ms": avg_trk,
-        "avg_beh_ms": avg_beh,
-        "avg_ann_ms": avg_ann,
-        "backend_fps": backend_fps,
-        "inference_fps": inference_fps
-    }
+    return {"device": device, "frames": n, **{f"{k}_p50_ms": p(v, 50) for k, v in stages.items()},
+            "server_ceiling_fps": cap_fps}
 
 
 if __name__ == "__main__":
-    run_benchmark()
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--frames", type=int, default=100)
+    ap.add_argument("--width", type=int, default=1280)
+    ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--video", default=None)
+    ap.add_argument("--imgsz", type=int, default=None)
+    ap.add_argument("--max-width", type=int, default=None)
+    ap.add_argument("--format", dest="output_format", default=None, help="jpeg (default) | webp | png")
+    a = ap.parse_args()
+    run_benchmark(a.frames, a.width, a.height, a.video, a.imgsz, a.max_width, a.output_format)

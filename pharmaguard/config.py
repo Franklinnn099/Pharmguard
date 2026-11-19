@@ -47,6 +47,14 @@ class DetectorConfig(BaseModel):
         default="auto",
         description="'auto', 'cuda', 'cpu', or 'mps'."
     )
+    imgsz: int = Field(
+        default=640, ge=160, le=1280,
+        description="Model inference size (letterboxed). Lower = faster, less accurate on small/far people."
+    )
+    half_precision: bool = Field(
+        default=True,
+        description="Use FP16 inference when running on CUDA (ignored on CPU)."
+    )
 
 
 class TrackerConfig(BaseModel):
@@ -65,7 +73,35 @@ class AlertConfig(BaseModel):
         description="Minimum seconds before repeating an alert for the same track ID."
     )
     max_history_entries: int = 100
-    alert_log_file: Optional[str] = "logs/pharmaguard_alerts.jsonl"
+    # Overridable via env so automated tests never write into the operational audit log.
+    alert_log_file: Optional[str] = Field(
+        default_factory=lambda: os.environ.get("PHARMAGUARD_ALERT_LOG", "logs/pharmaguard_alerts.jsonl")
+    )
+
+
+class StreamConfig(BaseModel):
+    """Browser <-> server video transport settings (the real-time critical path)."""
+    capture_width: int = Field(default=640, description="Ideal webcam capture width requested from the browser.")
+    capture_height: int = Field(default=480, description="Ideal webcam capture height requested from the browser.")
+    max_process_width: int = Field(
+        default=640, ge=160,
+        description="Frames wider than this are downscaled server-side before processing and return."
+    )
+    output_format: str = Field(
+        default="jpeg",
+        description="Encoding of the annotated frame sent back to the browser. "
+                    "Measured: webp 527 ms vs jpeg 13 ms per 1280x720 frame (CPU) - keep jpeg."
+    )
+    stream_every_sec: float = Field(
+        default=0.04, gt=0.0,
+        description="Browser capture poll interval. Gradio skips capture while a frame is pending, "
+                    "so this is a minimum spacing, not a queue rate."
+    )
+    signal_timeout_sec: float = Field(
+        default=2.0, gt=0.0,
+        description="No frame for this long => camera/connection reported as NO SIGNAL."
+    )
+    telemetry_window: int = Field(default=60, ge=5, description="Frames used for rolling FPS/latency stats.")
 
 
 class DisplayConfig(BaseModel):
@@ -89,6 +125,7 @@ class PharmaGuardConfig(BaseModel):
     zones: List[ShelfZone] = Field(default_factory=lambda: [ShelfZone()])
     alert: AlertConfig = Field(default_factory=AlertConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
+    stream: StreamConfig = Field(default_factory=StreamConfig)
 
     @classmethod
     def load_from_yaml(cls, path: str) -> "PharmaGuardConfig":

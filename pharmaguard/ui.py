@@ -1,15 +1,23 @@
 """
 Gradio web interface module for PharmaGuard.
-Provides a modern, high-contrast pharmacy security monitoring console
-with real-time browser webcam streaming, low-latency queues, and live telemetry.
+
+Real-time design (see TECHNICAL_DECISIONS.md §3):
+* The webcam stream event carries ONLY the annotated frame. Text/HTML panels are refreshed by a
+  1 Hz ``gr.Timer`` so per-frame websocket payloads stay small.
+* The browser is asked for a 640x480 capture (Gradio otherwise requests 1920x1440) and the
+  annotated frame is returned as JPEG (Gradio's default WebP encode measured ~0.5 s per 720p frame).
+* Gradio's webcam client does not capture while a frame is pending, so frames never queue up;
+  the server-side arrival interval is therefore the true end-to-end frame period.
 """
 
-from typing import Tuple, List, Optional
+from html import escape
+from typing import Any, Dict, Optional
 import gradio as gr
 import numpy as np
 
 from pharmaguard.pipeline import PharmaGuardPipeline, PipelineOutput
 from pharmaguard.config import PharmaGuardConfig
+from pharmaguard.telemetry import TelemetrySnapshot
 
 
 # Custom styling for professional pharmacy security console
@@ -70,6 +78,33 @@ body, .gradio-container {
 }
 """
 
+# Browser-side measurement of how many annotated frames are actually painted per second.
+# This is the number the operator experiences; it complements the server-side cycle time.
+CLIENT_FPS_HEAD = """
+<script>
+(() => {
+  let painted = 0, lastSrc = null;
+  const tick = () => {
+    const img = document.querySelector('#pg-output img');
+    if (img && img.src && img.src !== lastSrc) { lastSrc = img.src; painted++; }
+  };
+  const loop = () => { tick(); requestAnimationFrame(loop); };
+  requestAnimationFrame(loop);
+  setInterval(() => {
+    const el = document.getElementById('pg-client-fps');
+    if (el) el.textContent = painted.toFixed(0);
+    painted = 0;
+  }, 1000);
+})();
+</script>
+"""
+
+SIGNAL_LABELS = {
+    "LIVE": "LIVE",
+    "NO_SIGNAL": "NO SIGNAL - camera stopped or connection lost",
+    "STANDBY": "STANDBY - start the webcam on the left",
+}
+
 
 def format_alerts_html(alerts: list) -> str:
     """Format alerts as HTML cards with severity color chips."""
@@ -83,10 +118,10 @@ def format_alerts_html(alerts: list) -> str:
         html += f"""
         <div style='background: {bg_color}; border-left: 4px solid {color}; padding: 8px 12px; border-radius: 4px;'>
             <div style='display: flex; justify-content: space-between; align-items: center;'>
-                <strong style='color: {color}; font-size: 13px;'>[{a.severity}] {a.title}</strong>
-                <span style='font-size: 11px; color: #94a3b8;'>{a.timestamp_iso[-8:]}</span>
+                <strong style='color: {color}; font-size: 13px;'>[{escape(a.severity)}] {escape(a.title)}</strong>
+                <span style='font-size: 11px; color: #94a3b8;'>{escape(a.timestamp_iso[-8:])}</span>
             </div>
-            <div style='color: #cbd5e1; font-size: 12px; margin-top: 4px;'>{a.message}</div>
+            <div style='color: #cbd5e1; font-size: 12px; margin-top: 4px;'>{escape(a.message)}</div>
         </div>
         """
     html += "</div>"
@@ -103,13 +138,35 @@ def format_events_html(events: list) -> str:
         cat_color = "#38bdf8" if e.category == "SECURITY" else "#a3e635" if e.category == "TRACKING" else "#94a3b8"
         html += f"""
         <div style='border-bottom: 1px solid #1e293b; padding-bottom: 2px;'>
-            <span style='color: #64748b;'>{e.timestamp_iso}</span>
-            <span style='color: {cat_color}; font-weight: 600; margin-left: 6px;'>[{e.category}]</span>
-            <span style='color: #e2e8f0; margin-left: 6px;'>{e.message}</span>
+            <span style='color: #64748b;'>{escape(e.timestamp_iso)}</span>
+            <span style='color: {cat_color}; font-weight: 600; margin-left: 6px;'>[{escape(e.category)}]</span>
+            <span style='color: #e2e8f0; margin-left: 6px;'>{escape(e.message)}</span>
         </div>
         """
     html += "</div>"
     return html
+
+
+def format_telemetry(tele: TelemetrySnapshot, last: Optional[PipelineOutput], device: str) -> Dict[str, str]:
+    """Human-readable telemetry strings. Every figure here is measured, none are targets."""
+    live = tele.signal == "LIVE" and last is not None
+    timings = last.metadata.get("stage_timings", {}) if last else {}
+    res = last.metadata.get("resolution", "-") if last else "-"
+    in_res = last.metadata.get("input_resolution", "-") if last else "-"
+    status = f"{SIGNAL_LABELS.get(tele.signal, tele.signal)} | {device.upper()}"
+    if tele.interruptions:
+        status += f" | {tele.interruptions} interruption(s)"
+    return {
+        "status": status,
+        "tracked": str(last.active_tracks_count) if live else "0",
+        "ids": (", ".join(f"#{t}" for t in last.active_ids) or "None") if live else "None",
+        "fps": f"{tele.delivered_fps:.1f}" if live else "0.0",
+        "latency": (
+            f"cycle p50 {tele.cycle_p50_ms:.0f} / p95 {tele.cycle_p95_ms:.0f} ms | "
+            f"server {tele.processing_p50_ms:.0f} ms (det {timings.get('detect_ms', 0):.0f}) | "
+            f"transport+encode {tele.outside_p50_ms:.0f} ms | {in_res}->{res}"
+        ) if live else "-",
+    }
 
 
 def create_pharmaguard_ui(
@@ -118,50 +175,28 @@ def create_pharmaguard_ui(
 ) -> gr.Blocks:
     """Construct the Gradio dashboard interface."""
     cfg = config or pipeline.config
+    stream_cfg = cfg.stream
+    model_info = pipeline.detector.get_model_info()
+    device = str(model_info.get("device", "cpu"))
 
     def process_webcam_stream(frame_in: Optional[np.ndarray]):
-        """Stream handler callback invoked for each webcam frame."""
+        """Per-frame stream handler: returns only the annotated frame (keep this path lean)."""
         if frame_in is None:
-            # Return empty/standby states gracefully
-            empty_out = pipeline._create_empty_output(0.0, "STANDBY")
-            return (
-                empty_out.annotated_frame_rgb,
-                "STANDBY (Webcam Paused/Inactive)",
-                "0",
-                "None",
-                "0.0",
-                "0 ms",
-                format_alerts_html([]),
-                format_events_html(empty_out.recent_events)
-            )
+            return pipeline._create_empty_output(0.0, "STANDBY").annotated_frame_rgb
+        return pipeline.process_frame(frame_in).annotated_frame_rgb
 
-        # Process frame through full vision pipeline
-        output: PipelineOutput = pipeline.process_frame(frame_in)
-
-        active_ids_str = ", ".join(f"#{tid}" for tid in output.active_ids) if output.active_ids else "None"
-        alerts_html = format_alerts_html(output.recent_alerts)
-        events_html = format_events_html(output.recent_events)
-
-        # Format fine-grained latency breakdown
-        stage_timings = output.metadata.get("stage_timings", {})
-        det_ms = stage_timings.get("detect_ms", 0.0)
-        trk_ms = stage_timings.get("track_ms", 0.0)
-        hud_ms = stage_timings.get("annotate_ms", 0.0)
-        latency_str = f"{output.latency_ms:.0f} ms (Det: {det_ms:.0f}ms, Trk: {trk_ms:.0f}ms, HUD: {hud_ms:.0f}ms)"
-
-        device_str = output.metadata.get("device", "cpu").upper()
-        status_text = f"ONLINE [{output.connection_status}] | {device_str}"
-
-        return (
-            output.annotated_frame_rgb,
-            status_text,
-            str(output.active_tracks_count),
-            active_ids_str,
-            f"{output.fps:.1f}",
-            latency_str,
-            alerts_html,
-            events_html
-        )
+    def refresh_dashboard(cache: Dict[str, Any]):
+        """1 Hz poller for panels. Unchanged HTML is skipped to avoid needless re-renders."""
+        tele = pipeline.telemetry_snapshot()
+        last = pipeline.last_output
+        t = format_telemetry(tele, last, device)
+        alerts_html = format_alerts_html(pipeline.alert_manager.get_recent_alerts(limit=10))
+        events_html = format_events_html(pipeline.event_manager.get_recent(limit=15))
+        cache = dict(cache or {})
+        out_alerts = gr.skip() if cache.get("alerts") == alerts_html else alerts_html
+        out_events = gr.skip() if cache.get("events") == events_html else events_html
+        cache["alerts"], cache["events"] = alerts_html, events_html
+        return (t["status"], t["tracked"], t["ids"], t["fps"], t["latency"], out_alerts, out_events, cache)
 
     def on_reset_click():
         pipeline.reset_state()
@@ -169,9 +204,10 @@ def create_pharmaguard_ui(
             "0",
             "None",
             "0.0",
-            "0 ms",
+            "-",
             format_alerts_html([]),
-            format_events_html([])
+            format_events_html([]),
+            {},
         )
 
     def update_thresholds(conf: float, dwell: float):
@@ -183,23 +219,22 @@ def create_pharmaguard_ui(
     with gr.Blocks(title="PharmaGuard — Pharmacy AI Surveillance") as demo:
         # Custom CSS injection (Gradio 4/5/6 universal compatibility)
         gr.HTML(f"<style>{SECURITY_THEME_CSS}</style>")
+        panel_cache = gr.State({})
 
         # Header banner
         with gr.Row(elem_classes=["header-banner"]):
             with gr.Column(scale=8):
                 gr.HTML("""
                 <div class='header-title'>🛡️ PHARMAGUARD — AI Pharmacy Security Monitor</div>
-                <div class='header-subtitle'>Real-time suspicious interaction sequence detection & shelf dwell monitoring</div>
+                <div class='header-subtitle'>Flags potentially suspicious shelf interactions for staff review</div>
                 """)
             with gr.Column(scale=4, min_width=200):
-                device_badge = pipeline.detector.get_model_info().get("device", "cpu").upper()
-                model_name = pipeline.detector.get_model_info().get("model_name", "yolov8n.pt")
                 gr.HTML(f"""
                 <div style='text-align: right; padding-top: 4px;'>
                     <span style='background: #065f46; color: #34d399; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 9999px;'>
-                        ● SEC-OPS LIVE [{device_badge}]
+                        ● COMPUTE: {escape(device.upper())}
                     </span>
-                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {model_name} + ByteTrack</div>
+                    <div style='font-size: 11px; color: #64748b; margin-top: 4px;'>Engine: {escape(str(model_info.get('model_name')))} + IoU tracker</div>
                 </div>
                 """)
 
@@ -211,35 +246,49 @@ def create_pharmaguard_ui(
                     webcam_input = gr.Image(
                         sources=["webcam"],
                         streaming=True,
-                        label="1. Browser Camera Input (Live Feed - Click Record/Webcam to Start)",
-                        type="numpy"
+                        label="1. Camera input (click to start webcam)",
+                        type="numpy",
+                        webcam_options=gr.WebcamOptions(
+                            mirror=False,
+                            constraints={"video": {
+                                "width": {"ideal": stream_cfg.capture_width},
+                                "height": {"ideal": stream_cfg.capture_height},
+                            }},
+                        ),
                     )
                     annotated_output = gr.Image(
-                        label="2. PharmaGuard Real-Time AI Output (Annotated Feed)",
+                        label="2. PharmaGuard annotated output",
                         type="numpy",
-                        interactive=False
+                        format=stream_cfg.output_format,
+                        interactive=False,
+                        elem_id="pg-output",
                     )
 
             # Right column: Telemetry & Alert Operations Console
             with gr.Column(scale=5):
-                # Status & Metrics Grid
                 with gr.Row():
                     with gr.Column(scale=1):
-                        status_val = gr.Textbox(value="ONLINE", label="System Status", interactive=False)
+                        status_val = gr.Textbox(value=SIGNAL_LABELS["STANDBY"], label="Camera / Stream Status", interactive=False)
                     with gr.Column(scale=1):
                         tracked_val = gr.Textbox(value="0", label="Persons Tracked", interactive=False)
 
                 with gr.Row():
                     with gr.Column(scale=1):
-                        fps_val = gr.Textbox(value="0.0", label="Processing FPS", interactive=False)
+                        fps_val = gr.Textbox(value="0.0", label="Delivered FPS (end-to-end, server-measured)", interactive=False)
                     with gr.Column(scale=1):
-                        latency_val = gr.Textbox(value="0 ms", label="Frame Latency & Breakdown", interactive=False)
+                        gr.HTML(
+                            "<div style='font-size:12px;color:#94a3b8'>Displayed FPS (this browser)</div>"
+                            "<div id='pg-client-fps' style='font-size:20px;font-weight:600'>0</div>"
+                        )
+
+                with gr.Row():
+                    latency_val = gr.Textbox(value="-", label="Latency breakdown (measured)", interactive=False)
 
                 with gr.Row():
                     active_ids_val = gr.Textbox(value="None", label="Active Tracking IDs", interactive=False)
 
                 # Security Alerts Feed
-                gr.HTML("<div style='font-weight: 600; color: #f87171; font-size: 13px; margin-top: 10px;'>🚨 REAL-TIME SECURITY ALERTS</div>")
+                gr.HTML("<div style='font-weight: 600; color: #f87171; font-size: 13px; margin-top: 10px;'>🚨 ALERTS FOR STAFF REVIEW</div>")
                 alerts_box = gr.HTML(value=format_alerts_html([]), elem_classes=["alert-box"])
 
                 # Activity & Audit Event Timeline
@@ -260,35 +309,49 @@ def create_pharmaguard_ui(
                     cfg_status = gr.Textbox(label="Config Status", interactive=False, max_lines=1)
                     reset_btn = gr.Button("Reset Tracking & Clear Alerts", variant="secondary", size="sm")
 
-                    apply_btn.click(
-                        fn=update_thresholds,
-                        inputs=[conf_slider, dwell_slider],
-                        outputs=[cfg_status]
-                    )
+        panel_outputs = [status_val, tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
 
-                    reset_btn.click(
-                        fn=on_reset_click,
-                        inputs=[],
-                        outputs=[tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
-                    )
+        apply_btn.click(fn=update_thresholds, inputs=[conf_slider, dwell_slider], outputs=[cfg_status])
+        reset_btn.click(
+            fn=on_reset_click,
+            inputs=[],
+            outputs=[tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box, panel_cache],
+        )
 
-        # Wire webcam stream to pipeline processor with low-latency streaming parameters
+        # Per-frame path: image only. api_name lets tools/e2e_benchmark.py drive the same endpoint.
         webcam_input.stream(
             fn=process_webcam_stream,
             inputs=[webcam_input],
-            outputs=[
-                annotated_output,
-                status_val,
-                tracked_val,
-                active_ids_val,
-                fps_val,
-                latency_val,
-                alerts_box,
-                events_box
-            ],
-            stream_every=0.04,  # ~25 FPS stream rate (avoids default 0.5s = 2 FPS bottleneck)
+            outputs=[annotated_output],
+            stream_every=stream_cfg.stream_every_sec,
             show_progress="hidden",
-            concurrency_limit=1
+            concurrency_limit=1,
+            concurrency_id="frame_pipeline",
+            api_name="stream_frame",
+        )
+
+        # Request/response twin of the stream endpoint for tools/e2e_benchmark.py.
+        # gradio_client cannot drive a streaming event one frame at a time (it holds the stream open),
+        # so this hidden endpoint runs the SAME handler with the SAME JPEG output encoding.
+        bench_in = gr.Image(type="numpy", visible=False)
+        bench_out = gr.Image(type="numpy", format=stream_cfg.output_format, visible=False)
+        bench_in.change(
+            fn=process_webcam_stream,
+            inputs=[bench_in],
+            outputs=[bench_out],
+            show_progress="hidden",
+            concurrency_limit=1,
+            concurrency_id="frame_pipeline",
+            api_name="process_frame",
+        )
+
+        # Panels: 1 Hz, off the per-frame path.
+        timer = gr.Timer(1.0)
+        timer.tick(
+            fn=refresh_dashboard,
+            inputs=[panel_cache],
+            outputs=panel_outputs + [panel_cache],
+            show_progress="hidden",
         )
 
     return demo

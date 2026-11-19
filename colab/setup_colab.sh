@@ -7,7 +7,6 @@ nvidia-smi || echo "Warning: nvidia-smi failed. Ensure GPU runtime is selected."
 
 echo "=== [PharmaGuard] Installing Pinned Dependencies ==="
 pip install -r requirements.txt
-pip install --user lap || true
 
 echo "=== [PharmaGuard] Testing Model Download & Preload ==="
 python -c "

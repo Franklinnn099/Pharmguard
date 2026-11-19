@@ -75,8 +75,25 @@ class YOLODetector(BaseDetector):
         """Load pretrained model weights."""
         from ultralytics import YOLO
         self.model = YOLO(self.config.model_name)
-        # Warmup or push to target device
         self.model.to(self.device)
+        self.half = bool(self.config.half_precision and self.device.startswith("cuda"))
+        self._precision_kwargs = self._resolve_precision_kwargs(self.half)
+        # Warm-up: the first CUDA inference pays kernel/cuDNN initialisation (often >1 s).
+        # Pay it at startup, not on the first live webcam frame.
+        self.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+
+    @staticmethod
+    def _resolve_precision_kwargs(half: bool) -> Dict[str, Any]:
+        """FP16 flag across Ultralytics versions: 8.4+ uses ``quantize=16``; older uses ``half=True``."""
+        if not half:
+            return {}
+        try:
+            from ultralytics.cfg import get_cfg
+            if "quantize" in vars(get_cfg()):
+                return {"quantize": 16}
+        except Exception:  # pragma: no cover - defensive against Ultralytics internals moving
+            pass
+        return {"half": True}
 
     def detect(self, frame: np.ndarray) -> DetectionResult:
         """Run inference on the frame and filter for target classes."""
@@ -90,7 +107,9 @@ class YOLODetector(BaseDetector):
             iou=self.config.iou_threshold,
             classes=self.config.target_classes,
             device=self.device,
-            verbose=False
+            imgsz=self.config.imgsz,
+            verbose=False,
+            **self._precision_kwargs
         )
 
         if not results or len(results) == 0:
@@ -120,6 +139,8 @@ class YOLODetector(BaseDetector):
         return {
             "model_name": self.config.model_name,
             "device": self.device,
+            "imgsz": self.config.imgsz,
+            "half_precision": self.half,
             "confidence_threshold": self.config.confidence_threshold,
             "iou_threshold": self.config.iou_threshold,
             "target_classes": self.config.target_classes,

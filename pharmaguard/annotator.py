@@ -162,7 +162,8 @@ class SecurityAnnotator:
         cv2.putText(frame, stats_text, (mid_x, 21), font, font_scale, (200, 200, 200), thickness, lineType=cv2.LINE_AA)
 
         # Right: FPS & Latency
-        telemetry_text = f"FPS: {fps:.1f}  |  LATENCY: {latency_ms:.0f}ms"
+        # fps = delivered end-to-end frame rate; latency_ms = server processing time only.
+        telemetry_text = f"FPS: {fps:.1f}  |  PROC: {latency_ms:.0f}ms"
         tel_size = cv2.getTextSize(telemetry_text, font, font_scale, thickness)[0]
         tel_x = max(mid_x + t_size[0] + 20, w - tel_size[0] - 15)
         cv2.putText(frame, telemetry_text, (tel_x, 21), font, font_scale, (0, 220, 220), thickness, lineType=cv2.LINE_AA)
