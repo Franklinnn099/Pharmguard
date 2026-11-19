@@ -357,3 +357,18 @@ Header and **alarm strip** (banner + Acknowledge / Reset / Test) sit above the t
   showed full details; the **evidence clip played** (H.264 via ffmpeg, 10.1 s, 640x480, `readyState 4`, no media error); a
   verdict saved through the UI updated the table and the rate and was persisted with its audit row in SQLite; clicks on the zone
   image registered as numbered corners (`select` works on a non-interactive image in Gradio 6).
+
+---
+
+## 11. CPU Speed Defaults (2026-11-19, after operator report "annotated output is very slow")
+
+Measured on the dev laptop (6-core CPU; its NVIDIA Quadro M2000M is unused because the installed PyTorch is the CPU-only build):
+- **Auto inference size**: `detector.imgsz` defaults to None, which means 640 on GPU and **480 on CPU**. Pose detection takes 90 ms at 640 vs **61 ms at 480**
+  with the same people found (4.0 vs 4.3 detections/frame on the sample photo). 416 was barely faster and much jumpier (p95 110 ms).
+- **On-demand bag detection** (`objects.on_demand`, default True): the bag detector (~100 ms on CPU) runs only while a hand is entering or touching
+  a shelf or is inside the 3 s carry window, the only time bag positions can change the score. Trade-off: the informational
+  "hand at own bag, no shelf contact" event is no longer produced (it never affected scores or alerts).
+- End to end through the real server and HTTP path (`tools/e2e_benchmark.py`, localhost): **236 → 185 ms p50, 389 → 253 ms p95,
+  3.8 → 5.2 FPS**.
+- The CPU remains the limit (~5 FPS). Smooth real-time needs a GPU: the Colab T4 (intended demo setup). Enabling the laptop's
+  Maxwell-generation GPU (compute capability 5.0) needs a CUDA PyTorch build that still supports it; that is unverified and not attempted.

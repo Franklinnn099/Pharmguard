@@ -106,7 +106,7 @@ def run_benchmark(num_frames: int = 100, width: int = 1280, height: int = 720, v
     print("PHARMAGUARD SERVER-SIDE BENCHMARK (compute only; network NOT included)")
     print("=" * 72)
     print(f"Device            : {device}")
-    print(f"Model / imgsz     : {pipeline.model_name} / {config.detector.imgsz}"
+    print(f"Model / imgsz     : {pipeline.model_name} / {pipeline.detector.imgsz}"
           f"{' (FP16)' if getattr(pipeline.detector, 'half', False) else ''}")
     print(f"Input -> processed: {width}x{height} -> {out.metadata['resolution']}  "
           f"(source: {'video ' + video if video else 'sample photo'})")

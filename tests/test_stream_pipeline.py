@@ -136,3 +136,44 @@ def test_live_server_http_round_trip_returns_annotated_jpeg():
         assert tele.signal == "LIVE" and tele.cycle_p50_ms > 0
     finally:
         demo.close()
+
+
+# --------------------------------------------------------------------------- CPU performance defaults
+
+def test_auto_inference_size_is_480_on_cpu_and_explicit_value_wins():
+    from pharmaguard.config import DetectorConfig
+    assert YOLODetector(DetectorConfig(device="cpu")).imgsz == 480
+    assert YOLODetector(DetectorConfig(device="cpu", imgsz=640)).imgsz == 640
+
+
+def test_bag_detector_runs_only_when_a_hand_is_at_or_just_left_a_shelf():
+    """On-demand bag detection: zero cost while people merely stand/walk; active around shelf contact."""
+    from behavior_scenarios import Actor, FPS
+    from test_live_streaming_integration import FixedBagDetector, ScriptedPoseDetector
+
+    class CountingBags(FixedBagDetector):
+        calls = 0
+
+        def detect(self, frame):
+            CountingBags.calls += 1
+            return super().detect(frame)
+
+    def run(script):
+        actor = Actor(1, 320, script, bag=True)
+        frames = actor.frames()
+        cfg = PharmaGuardConfig()
+        cfg.objects.enabled = False
+        cfg.recording.enabled = False
+        p = PharmaGuardPipeline(cfg, detector=ScriptedPoseDetector(frames, cfg))
+        CountingBags.calls = 0
+        p.object_detector = CountingBags(actor)
+        for i in range(len(frames)):
+            p.process_frame(np.zeros((480, 640, 3), np.uint8), timestamp=i / FPS)
+        return CountingBags.calls, p
+
+    calls, _ = run([(6.0, "rest", None)])                       # standing, hands down: never needed
+    assert calls == 0
+    calls, p = run([(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None),
+                    (1.2, "bag_R", None), (6.0, "rest", None)])
+    assert 3 <= calls <= 25                                      # only around the contact + carry window
+    assert p.alarm.snapshot().latest_review is not None          # and the transfer was still detected

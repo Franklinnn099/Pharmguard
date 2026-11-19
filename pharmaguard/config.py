@@ -53,9 +53,10 @@ class DetectorConfig(BaseModel):
         default="auto",
         description="'auto', 'cuda', 'cpu', or 'mps'."
     )
-    imgsz: int = Field(
-        default=640, ge=160, le=1280,
-        description="Model inference size (letterboxed). Lower = faster, less accurate on small/far people."
+    imgsz: Optional[int] = Field(
+        default=None, ge=160, le=1280,
+        description="Model inference size (letterboxed). None = auto: 640 on GPU, 480 on CPU. "
+                    "Measured on the dev CPU (pose model): 640 -> 90 ms, 480 -> 61 ms per frame, same people found."
     )
     half_precision: bool = Field(
         default=True,
@@ -111,6 +112,10 @@ class ObjectDetectorConfig(BaseModel):
     confidence_threshold: float = Field(default=0.30, ge=0.05, le=1.0)
     frame_stride: int = Field(default=3, ge=1,
         description="Run every Nth frame; bags move slowly, results are reused in between.")
+    on_demand: bool = Field(default=True,
+        description="Only run while a hand is at / has just left a shelf (when bag positions can affect the "
+                    "score). Saves ~100 ms every Nth frame on CPU. False = run continuously (also reports "
+                    "informational 'hand at own bag' events with no shelf contact).")
 
 
 class BehaviorConfig(BaseModel):

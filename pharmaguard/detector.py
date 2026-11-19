@@ -77,6 +77,8 @@ class YOLODetector(BaseDetector):
     def __init__(self, config: Optional[DetectorConfig] = None):
         self.config = config or DetectorConfig()
         self.device = self._resolve_device(self.config.device)
+        # Auto inference size: CPU is the bottleneck locally (measured 90 ms @640 vs 61 ms @480, same detections).
+        self.imgsz = self.config.imgsz or (640 if self.device.startswith("cuda") else 480)
         self.model = None
         self._load_model()
 
@@ -124,7 +126,7 @@ class YOLODetector(BaseDetector):
             iou=self.config.iou_threshold,
             classes=self.config.target_classes,
             device=self.device,
-            imgsz=self.config.imgsz,
+            imgsz=self.imgsz,
             verbose=False,
             **self._precision_kwargs
         )
@@ -163,7 +165,7 @@ class YOLODetector(BaseDetector):
         return {
             "model_name": self.config.model_name,
             "device": self.device,
-            "imgsz": self.config.imgsz,
+            "imgsz": self.imgsz,
             "half_precision": self.half,
             "has_keypoints": bool(getattr(self.model, "task", "") == "pose"),
             "confidence_threshold": self.config.confidence_threshold,

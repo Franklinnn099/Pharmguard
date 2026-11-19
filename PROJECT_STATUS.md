@@ -3,7 +3,7 @@
 **Last updated**: 2026-11-19 (Priorities 1-5 merged to `main`; Priority 6 on branch `p6-dashboard`)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 129 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+**Test suite**: 131 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -59,6 +59,9 @@ The `--imgsz 416 --max-width 480` variant gives a total p50 of 55.8 ms.
 |---|---|---|---|
 | Previous transport (WebP, no downscale) | 553 ms | 650 ms | 1.8 |
 | Current defaults | 190 ms | 215 ms | 5.3 |
+
+**Current defaults on CPU** (after the speed fix, TECHNICAL_DECISIONS §11, localhost, pose model + behaviour + recording path):
+round trip p50 **185 ms**, p95 253 ms, **5.2 FPS** (was 236 / 389 ms, 3.8 FPS).
 
 Localhost has no network latency. Over the `gradio.live` tunnel, each frame makes 4 HTTP exchanges, and each one adds a network round trip.
 

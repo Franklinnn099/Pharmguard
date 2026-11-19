@@ -180,12 +180,20 @@ class PharmaGuardPipeline:
         t_track_end = time.perf_counter()
         track_ms = (t_track_end - t_track_start) * 1000.0
 
-        # 2b. Carried containers (bags), every Nth frame; boxes reused in between.
+        # 2b. Carried containers (bags), every Nth frame; boxes reused in between. On demand (default), only
+        #     while a hand is at / just left a shelf - the only time bag positions can affect the score.
         objects_ms = 0.0
-        if self.object_detector is not None and (self.frame_counter - 1) % self.config.objects.frame_stride == 0:
-            t_obj = time.perf_counter()
-            self.bag_boxes = list(self.object_detector.detect(frame_bgr).xyxy)
-            objects_ms = (time.perf_counter() - t_obj) * 1000.0
+        if self.object_detector is not None:
+            wanted = (not self.config.objects.on_demand) or self.behavior_analyzer.needs_bag_context(ts)
+            if not wanted:
+                self.bag_boxes = []
+                self._bag_frames = 0
+            else:
+                if getattr(self, "_bag_frames", 0) % self.config.objects.frame_stride == 0:
+                    t_obj = time.perf_counter()
+                    self.bag_boxes = list(self.object_detector.detect(frame_bgr).xyxy)
+                    objects_ms = (time.perf_counter() - t_obj) * 1000.0
+                self._bag_frames = getattr(self, "_bag_frames", 0) + 1
 
         # 3. Behavioural analysis: hand-shelf-bag/pocket sequences and suspicion scoring
         t_beh_start = time.perf_counter()

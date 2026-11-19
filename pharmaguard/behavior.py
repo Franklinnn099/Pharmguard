@@ -169,6 +169,20 @@ class PharmacyBehaviorAnalyzer:
         return PersonView(score=round(self.score(tid), 2), level=st.level,
                           hands=st.last_obs.hands if st.last_obs else [], observation=st.last_obs)
 
+    def needs_bag_context(self, now: Optional[float] = None) -> bool:
+        """True while bag positions can change the score: a hand is entering / touching a shelf, or has left
+        one within the carry window. Lets the pipeline skip the bag detector the rest of the time."""
+        now = self._now if now is None else now
+        cfg = self.config
+        horizon = cfg.carry_window_sec + max(cfg.pocket_hold_sec, cfg.bag_hold_sec)
+        for st in self.people.values():
+            for hs in st.hands.values():
+                if hs.contact_zone or hs.candidate_zone:
+                    return True
+                if not hs.carry_consumed and hs.last_contact_end is not None and now - hs.last_contact_end <= horizon:
+                    return True
+        return False
+
     def zone_activity(self) -> Dict[str, str]:
         """Per zone: 'CONTACT' (a hand is in it), 'PRESENCE' (someone at it) or 'IDLE'."""
         return dict(self._zone_activity)
