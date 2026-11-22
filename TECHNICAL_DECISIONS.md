@@ -525,3 +525,17 @@ detections every 150 ms, 600 ms lag):**
 
 Without any correction the error would be speed x lag = 115 px for the whole walk. Chrome check against the local server:
 controls apply live (delay capped at 300 then 0), uploads arrive as 480x360, no script errors.
+
+---
+
+## 18. Prediction Jitter Fix; Upload Default Back to 640 px (2026-11-22, operator: "the detection isn't working now")
+
+Reported right after §17. Two changes in §17 could explain it; both are addressed (the operator's screen has not been seen):
+- **Prediction amplified jitter (confirmed bug).** Extrapolation took velocity from the two newest detections. With fast GPU
+  detections (~30 ms apart), normal keypoint jitter over 30 ms looked like high speed and was projected up to 300 ms ahead.
+  Node harness on the page code, person standing still, +-3 px detection jitter: boxes off by mean 21.5 / worst 58 px at
+  30 ms spacing (wrist dots jitter more, so worse). Fix: velocity over >= 300 ms of detections (`VELOCITY_BASE_MS`):
+  mean 3.0 / worst 7.6 px at 30 ms spacing, 4.5 / 9.5 px at 150 ms. Walk-then-stop at the 300 ms cap: mean 7.9 px,
+  worst 75 px (was 6.2 / 75).
+- **Upload default 640 px again (JPEG 0.7), 480/320 remain selectable.** Sample photo, pose model at imgsz 640: wrist confidence
+  mean 0.63 (640 q70) vs 0.59 (480 q60); a small effect on this photo, but detection was known to work at 640.

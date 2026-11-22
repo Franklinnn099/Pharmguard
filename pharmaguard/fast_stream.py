@@ -151,12 +151,12 @@ FAST_STREAM_HEAD = """
   const S = {session:'', running:false, stream:null, seq:0, inflight:0, maxInflight:3, lastPainted:-1,
              painted:0, updates:0, rtts:[], lastRtt:null, errors:0, timer:null, cap:null, capCtx:null,
              mode:'synced', overlay:null, overlayAt:0, lastVideoTime:-1, raf:null,
-             frames:[], dets:[], lags:[], delay:0, maxDelay:300, uploadW:480, shownT:-1, framePending:false};
+             frames:[], dets:[], lags:[], delay:0, maxDelay:300, uploadW:640, shownT:-1, framePending:false};
   // Display modes: 'synced' = browser video delayed by min(measured detection lag, maxDelay); detections
   // are interpolated onto each shown frame, and extrapolated (capped) for whatever part of the lag the
   // delay does not cover. maxDelay 0 = fully live video with predicted boxes. 'image' = server JPEGs.
   const OVERLAY_MODES = {synced: true};
-  const BUFFER_MS = 2500, MAX_PREDICT_MS = 700;
+  const BUFFER_MS = 2500, MAX_PREDICT_MS = 700, VELOCITY_BASE_MS = 300;
   const $ = (id) => document.getElementById(id);
   const say = (msg, color) => { const el = $('pg-fast-msg'); if (el) { el.textContent = msg; el.style.color = color || '#94a3b8'; } };
   const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; };
@@ -251,10 +251,14 @@ FAST_STREAM_HEAD = """
     const a = d[i], b = d[i + 1];
     if (a.t > t) return a.o;                                          // older than every detection held
     if (b) return blend(a, b, (t - a.t) / Math.max(1, b.t - a.t));     // detections on both sides
-    // Newer than the newest detection: extrapolate from the last two (capped, so a person who stops
-    // is not flung across the screen).
-    const p = i > 0 ? d[i - 1] : null;
-    if (!p || a.t <= p.t) return a.o;
+    // Newer than the newest detection: extrapolate (capped, so a person who stops is not flung across
+    // the screen). Velocity is taken over >= VELOCITY_BASE_MS of detections, not the last two: with fast
+    // (GPU) detections 30 ms apart, normal keypoint jitter over the last pair looks like high speed and
+    // was amplified ~10x (measured: a person standing still drew boxes jumping up to 58 px).
+    let j = i - 1;
+    while (j > 0 && a.t - d[j].t < VELOCITY_BASE_MS) j--;
+    const p = j >= 0 ? d[j] : null;
+    if (!p || a.t - p.t < 1) return a.o;
     return blend(p, a, 1 + Math.min(t - a.t, MAX_PREDICT_MS) / (a.t - p.t));
   }
 
@@ -325,7 +329,7 @@ FAST_STREAM_HEAD = """
     try {
       // Synchronous toDataURL: measured 17 ms per 640x480 frame in Chrome, while the async
       // canvas.toBlob / OffscreenCanvas.convertToBlob encoders took ~930-1000 ms (scheduled at low priority).
-      const b64 = S.cap.toDataURL('image/jpeg', 0.6).split(',')[1];
+      const b64 = S.cap.toDataURL('image/jpeg', S.uploadW >= 640 ? 0.7 : 0.6).split(',')[1];
       const bin = atob(b64); const bytes = new Uint8Array(bin.length);
       for (let k = 0; k < bin.length; k++) bytes[k] = bin.charCodeAt(k);
       const blob = new Blob([bytes], {type: 'image/jpeg'});
@@ -384,7 +388,7 @@ FAST_STREAM_HEAD = """
     const sel = $('pg-fast-inflight'); S.maxInflight = sel ? parseInt(sel.value, 10) || 3 : 3;
     const md = $('pg-fast-mode'); S.mode = md ? md.value : 'synced';
     const mx = $('pg-fast-maxdelay'); S.maxDelay = mx ? parseFloat(mx.value) : 300;
-    const up = $('pg-fast-upload'); S.uploadW = up ? parseInt(up.value, 10) || 480 : 480;
+    const up = $('pg-fast-upload'); S.uploadW = up ? parseInt(up.value, 10) || 640 : 640;
     S.session = Math.random().toString(36).slice(2) + Date.now().toString(36);
     S.running = true; S.seq = 0; S.lastPainted = -1; S.rtts = []; S.lastRtt = null; S.errors = 0; S.overlay = null;
     S.dets = []; S.lags = []; S.delay = 0; clearFrames();
@@ -411,7 +415,7 @@ FAST_STREAM_HEAD = """
     if (!ev.target) return;
     if (ev.target.id === 'pg-fast-inflight') S.maxInflight = parseInt(ev.target.value, 10) || 3;
     if (ev.target.id === 'pg-fast-maxdelay') S.maxDelay = parseFloat(ev.target.value);
-    if (ev.target.id === 'pg-fast-upload') S.uploadW = parseInt(ev.target.value, 10) || 480;
+    if (ev.target.id === 'pg-fast-upload') S.uploadW = parseInt(ev.target.value, 10) || 640;
     if (ev.target.id === 'pg-fast-mode') {
       S.mode = ev.target.value; S.overlay = null; S.dets = []; S.delay = 0; clearFrames();
       if (S.running && OVERLAY_MODES[S.mode] && !S.raf) S.raf = requestAnimationFrame(render);
@@ -450,7 +454,7 @@ FAST_STREAM_HTML = """
       </select></label>
     <label style='font-size:12px;color:#94a3b8;' title='Smaller uploads reduce lag on slow connections'>Upload
       <select id='pg-fast-upload' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;'>
-        <option value='640'>640 px</option><option value='480' selected>480 px</option><option value='320'>320 px</option>
+        <option value='640' selected>640 px</option><option value='480'>480 px</option><option value='320'>320 px</option>
       </select></label>
     <label style='font-size:12px;color:#94a3b8;'>Frames in flight
       <select id='pg-fast-inflight' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;'>
