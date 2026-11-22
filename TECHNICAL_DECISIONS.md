@@ -498,3 +498,30 @@ the person's true position in the displayed frame):** Synced median error **3.5 
 throttled to ~1 frame/s), so treat as indicative. The p90 includes moments when the box matched the wrong reference person.
 Not yet measured over gradio.live on a GPU.
 
+
+---
+
+## 17. Lower Video Delay: Max-Delay Control + Smaller Uploads (2026-11-22, operator: "the video is delayed too much")
+
+**Changes (browser client only):**
+- Auto delay is now the median capture->result lag of the last 15 detections (the extra "+ detection spacing + 30 ms"
+  margin of §16 is gone; the newest stretch is extrapolated instead of waited for).
+- **Max delay** selector (default **300 ms**; Auto / 500 / 300 / 150 / 0): the video is delayed by
+  `min(lag, Max delay)`; for the uncovered part of the lag, boxes are extrapolated from the two newest detections
+  (capped at 0.7 s). 0 = fully live. The §16 "Live" mode is folded into this (Max delay 0).
+- **Upload** selector (default **480 px**, JPEG quality 0.6; 640 / 320 available). Measured on the sample photo
+  (OpenCV encoder): 640 px q70 = 70 KB, 480 px q60 = 40 KB (1.8x smaller), 320 px q60 = 19 KB (3.6x smaller).
+  Smaller uploads matter when the uplink is slow and several frames are in flight. Pose accuracy at 320 px is unmeasured.
+
+**Measured box error (Node harness running the page's real blend/overlayAt code; person walks ~190 px/s then stops dead;
+detections every 150 ms, 600 ms lag):**
+
+| Max delay | mean error | worst (just after the stop) |
+|---|---|---|
+| 600 ms (= lag, fully synced) | 0.5 px | 17 px |
+| 300 ms (default) | 6.2 px | 75 px |
+| 150 ms | 11.1 px | 104 px |
+| 0 (live) | 17.6 px | 125 px |
+
+Without any correction the error would be speed x lag = 115 px for the whole walk. Chrome check against the local server:
+controls apply live (delay capped at 300 then 0), uploads arrive as 480x360, no script errors.

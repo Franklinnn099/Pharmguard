@@ -1,6 +1,6 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16)
+**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control + smaller uploads §17)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
 **Test suite**: 148 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
