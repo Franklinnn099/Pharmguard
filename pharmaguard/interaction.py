@@ -31,6 +31,9 @@ class HandObservation:
     in_zone_raw: Optional[str] = None   # zone containing the wrist before torso exclusion (diagnostics)
     in_pocket: bool = False
     in_bag: bool = False
+    # Wrist position accepted for the pocket/bag test only (lower confidence: a hand going INTO a pocket
+    # or bag is partly hidden, so the pose model's wrist confidence drops). None if below even that.
+    reach_point: Optional[Point] = None
 
     @property
     def visible(self) -> bool:
@@ -48,6 +51,7 @@ class PersonObservation:
     pocket_radius: float = 0.0
     torso_box: Optional[np.ndarray] = None
     bag_boxes: List[np.ndarray] = field(default_factory=list)
+    hips_visible: bool = False
 
 
 def zone_polygons_px(zones: Sequence[ShelfZone], width: int, height: int) -> Dict[str, np.ndarray]:
@@ -123,16 +127,20 @@ def observe_person(person: TrackedPerson, zone_polys: Dict[str, np.ndarray],
         by = [p[1] for p in body]
         m = cfg.torso_exclusion_torso * torso
         obs.torso_box = np.array([min(bx) - m, min(by) - 0.5 * m, max(bx) + m, max(by) + 0.5 * m], np.float32)
-    # Pocket regions only where hips are actually visible: never guess (false-positive control).
-    obs.pocket_centers = hips
-    hip_line = max(p[1] for p in hips) if hips else None
+    # Pocket regions only where hips are actually detected (never invented). The hip threshold is a little
+    # lower than for other joints: hips are often partly covered by clothing / a hand going into a pocket.
+    pocket_hips = [p for p in (_kp(kps, KP_L_HIP, cfg.hip_min_conf), _kp(kps, KP_R_HIP, cfg.hip_min_conf)) if p]
+    obs.pocket_centers = pocket_hips
+    obs.hips_visible = bool(pocket_hips)
+    hip_line = max(p[1] for p in pocket_hips) if pocket_hips else None
     obs.pocket_radius = cfg.pocket_radius_torso * torso
     obs.bag_boxes = [_expand(b, cfg.bag_box_expand) for b in bags_for_person(box, bag_boxes)]
 
     for side, idx in (("L", KP_L_WRIST), ("R", KP_R_WRIST)):
         conf = float(kps[idx][2])
         pt = _kp(kps, idx, mc)
-        hand = HandObservation(side=side, point=pt, confidence=conf)
+        reach = pt or _kp(kps, idx, cfg.pocket_wrist_min_conf)
+        hand = HandObservation(side=side, point=pt, confidence=conf, reach_point=reach)
         if pt is not None:
             for name, poly in zone_polys.items():
                 if point_in_polygon(pt, poly):
@@ -140,9 +148,11 @@ def observe_person(person: TrackedPerson, zone_polys: Dict[str, np.ndarray],
                     if obs.torso_box is None or not _in_box(pt, obs.torso_box):
                         hand.shelf_zone = name
                     break
-            low_enough = hip_line is not None and pt[1] >= min(c[1] for c in hips) - cfg.pocket_max_above_hip_torso * torso
+        if reach is not None:
+            low_enough = (hip_line is not None and
+                          reach[1] >= min(c[1] for c in pocket_hips) - cfg.pocket_max_above_hip_torso * torso)
             hand.in_pocket = low_enough and any(
-                np.hypot(pt[0] - c[0], pt[1] - c[1]) <= obs.pocket_radius for c in hips)
-            hand.in_bag = any(_in_box(pt, b) for b in obs.bag_boxes)
+                np.hypot(reach[0] - c[0], reach[1] - c[1]) <= obs.pocket_radius for c in pocket_hips)
+            hand.in_bag = any(_in_box(reach, b) for b in obs.bag_boxes)
         obs.hands.append(hand)
     return obs

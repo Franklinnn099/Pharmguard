@@ -431,3 +431,23 @@ RETURNED_TO_SHELF event). New event type `ITEM_NOT_RETURNED`.
 putting it back, or carrying it at the hip towards a till, now raises an ALERT instead of a REVIEW. Real-footage false-alarm
 rate remains unmeasured (P3-1). Weights and the window are configurable (`behavior.keep_confirm_sec`, `behavior.w_item_kept`).
 
+---
+
+## 14. Pocket Detection Made Reachable + On-Screen Diagnostics (2026-11-22)
+
+**Operator report (live webcam, Colab):** wrist dot turned orange at the shelf but never magenta at the pocket, so no transfer
+was ever recorded. The pocket test needed the wrist keypoint at confidence >= 0.35 inside a 0.30-torso circle around a hip
+at >= 0.35. A hand going INTO a pocket is partly hidden, so the wrist confidence drops: the most likely failure.
+
+**Changes (all `BehaviorConfig`):**
+- `pocket_wrist_min_conf` 0.10: the pocket/bag test accepts a lower-confidence wrist (`HandObservation.reach_point`).
+  Shelf contact still needs `keypoint_min_conf` 0.35 (tested: a 0.2-confidence wrist in the shelf is not a contact).
+- `hip_min_conf` 0.25 for placing pocket regions (was the general 0.35).
+- `pocket_radius_torso` 0.30 -> 0.42, `pocket_max_above_hip_torso` 0.10 -> 0.15 (also in `configs/demo_shelf.yaml`).
+- Annotator: thin magenta circles show the pocket regions; "hips not visible: pocket check off" when hips are missing;
+  a hollow marker shows a low-confidence wrist used only for pocket/bag.
+
+**Checked:** scripted scenarios unchanged (browse, examine-at-hip-and-return, relaxed hands still raise nothing); new tests for a
+0.2-confidence wrist in the pocket (alarm) and missing hips (pocket off). On the sample photo the new settings flag no hand as
+"at pocket" that the old ones did not (one relaxed hand was already flagged: P3-2). **Not yet checked on live pocketing footage.**
+

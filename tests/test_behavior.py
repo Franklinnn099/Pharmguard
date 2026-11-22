@@ -49,6 +49,45 @@ def test_geometry_pocket_and_bag():
     assert r.in_bag and not r.in_pocket
 
 
+def test_geometry_partly_hidden_wrist_in_pocket_still_counts_but_never_touches_shelf():
+    """A hand going into a pocket is partly hidden: wrist confidence ~0.2 must still count as pocket,
+    but a wrist that uncertain must never count as a shelf contact."""
+    kp = skeleton(320.0, "pocket_R")
+    kp[10, 2] = 0.2
+    p = TrackedPerson(tracker_id=1, current_box=person_box(kp), confidence=0.9, centroid=(0, 0), keypoints=kp)
+    r = {h.side: h for h in observe_person(p, zone_polygons_px([ShelfZone()], W, H), [], CFG).hands}["R"]
+    assert r.point is None and r.reach_point is not None and r.in_pocket
+    kp = skeleton(320.0, "reach_R")
+    kp[10, 2] = 0.2
+    p = TrackedPerson(tracker_id=1, current_box=person_box(kp), confidence=0.9, centroid=(0, 0), keypoints=kp)
+    r = {h.side: h for h in observe_person(p, zone_polygons_px([ShelfZone()], W, H), [], CFG).hands}["R"]
+    assert r.shelf_zone is None
+
+
+def test_geometry_hips_not_detected_disables_pocket_and_is_reported():
+    kp = skeleton(320.0, "pocket_R")
+    kp[11, 2] = kp[12, 2] = 0.1
+    p = TrackedPerson(tracker_id=1, current_box=person_box(kp), confidence=0.9, centroid=(0, 0), keypoints=kp)
+    obs = observe_person(p, zone_polygons_px([ShelfZone()], W, H), [], CFG)
+    assert not obs.hips_visible and not any(h.in_pocket for h in obs.hands)
+
+
+def test_shelf_to_partly_hidden_pocket_raises_alarm():
+    """End to end with the wrist confidence dropping to 0.2 while the hand is in the pocket."""
+    from behavior_scenarios import POSES
+    script = [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None), (1.2, "pocket_R", None),
+              (8.0, "rest", None)]
+    actor = Actor(1, 320, script, leave_at_end=False)
+    frames = actor.frames()
+    for i, (t, kp, box) in enumerate(frames):
+        if abs(kp[10, 0] - (320 + POSES["pocket_R"][1][0])) < 1 and abs(kp[10, 1] - POSES["pocket_R"][1][1]) < 1:
+            kp[10, 2] = 0.2
+    actor.frames = lambda: frames
+    run = run_actors([actor])
+    assert len(run.of(E.HAND_TO_POCKET)) == 1
+    assert len(run.of(E.SUSPICION_ALERT)) == 1
+
+
 def test_geometry_low_confidence_wrists_are_ignored():
     for h in _obs("hands_hidden").hands:
         assert not h.visible and h.shelf_zone is None

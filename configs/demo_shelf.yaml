@@ -23,7 +23,7 @@ behavior:
   carry_window_sec: 3.0
   # Size of the waist/pocket region around each hip (in torso lengths). Calibrate on staged clips:
   # too large -> relaxed hands count as "pocket"; too small -> real pocketing missed.
-  pocket_radius_torso: 0.30
+  pocket_radius_torso: 0.42
 
 objects:
   enabled: true        # detect handbags/backpacks as concealment targets

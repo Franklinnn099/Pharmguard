@@ -33,7 +33,7 @@ The system judges shelf interaction by **wrist keypoints** (YOLOv8-pose). Wrists
 3. Press **Save to file** (saves into `configs/demo_shelf.yaml`) so it survives a restart (`--config configs/demo_shelf.yaml`).
 4. Check: when the actor's hand reaches into the shelf, the zone badge shows **HAND CONTACT** and the wrist dot turns **orange**.
 
-Wrist dots: green = free, orange = in shelf, magenta = at pocket/bag. Person box: blue = normal, amber = REVIEW, red = ALERT.
+Wrist dots: green = free, orange = in shelf, magenta = at pocket/bag (hollow = partly hidden wrist). Thin magenta circles at the hips are the pocket regions; if the video says "hips not visible: pocket check off", step back or lower the camera. Person box: blue = normal, amber = REVIEW, red = ALERT.
 
 ## 3. Staged scenarios (mandate §6) and expected results
 

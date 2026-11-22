@@ -99,9 +99,26 @@ class SecurityAnnotator:
                 thick = self.config.box_thickness + (2 if level == 2 else 0)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), box_color, thick, lineType=cv2.LINE_AA)
 
+            # Pocket regions (thin magenta circles) so the operator can see where "pocket" is; or a warning
+            # when the hips are not detected (then pocket detection cannot work).
+            obs = getattr(view, "observation", None)
+            if obs is not None and obs.has_pose:
+                if obs.hips_visible:
+                    for c in obs.pocket_centers:
+                        cv2.circle(frame, (int(c[0]), int(c[1])), max(4, int(obs.pocket_radius)), (200, 0, 200), 1,
+                                   lineType=cv2.LINE_AA)
+                else:
+                    cv2.putText(frame, "hips not visible: pocket check off", (x1 + 4, min(y2 - 6, frame.shape[0] - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, lineType=cv2.LINE_AA)
+
             # Wrists: green = free, orange = in shelf, magenta = at pocket/bag.
+            # A hollow marker is a low-confidence wrist used only for the pocket/bag test.
             for hand in getattr(view, "hands", []) or []:
                 if hand.point is None:
+                    rp = getattr(hand, "reach_point", None)
+                    if rp is not None:
+                        col = (255, 0, 255) if (hand.in_pocket or hand.in_bag) else (80, 220, 80)
+                        cv2.circle(frame, (int(rp[0]), int(rp[1])), 6, col, 2, lineType=cv2.LINE_AA)
                     continue
                 color = (80, 220, 80)
                 if hand.shelf_zone:

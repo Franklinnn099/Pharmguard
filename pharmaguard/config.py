@@ -131,9 +131,14 @@ class BehaviorConfig(BaseModel):
     pocket_hold_sec: float = Field(default=0.6, ge=0.0,
         description="Wrist must stay in the waist/pocket region this long (filters arms swinging past).")
     bag_hold_sec: float = Field(default=0.3, ge=0.0)
-    pocket_radius_torso: float = Field(default=0.30, gt=0.0,
+    pocket_radius_torso: float = Field(default=0.42, gt=0.0,
         description="Pocket region = disc around each hip keypoint, radius in torso lengths (shoulder-hip).")
-    pocket_max_above_hip_torso: float = Field(default=0.10, ge=0.0,
+    pocket_wrist_min_conf: float = Field(default=0.10, ge=0.0, le=1.0,
+        description="Wrist confidence accepted for the pocket/bag test only. A hand going into a pocket or bag is "
+                    "partly hidden, so its wrist confidence drops below keypoint_min_conf. Shelf contact stays strict.")
+    hip_min_conf: float = Field(default=0.25, ge=0.0, le=1.0,
+        description="Hip keypoint confidence needed to place a pocket region (hips are often covered by clothing).")
+    pocket_max_above_hip_torso: float = Field(default=0.15, ge=0.0,
         description="Wrist may be at most this far ABOVE the hip line to count as pocket (holding a product "
                     "in front of the belly/chest is higher and must not count).")
     torso_exclusion_torso: float = Field(default=0.20, ge=0.0,

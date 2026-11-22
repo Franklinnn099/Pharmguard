@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13)
+**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 143 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
+**Test suite**: 146 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
