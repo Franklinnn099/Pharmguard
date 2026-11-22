@@ -372,3 +372,39 @@ Measured on the dev laptop (6-core CPU; its NVIDIA Quadro M2000M is unused becau
   3.8 → 5.2 FPS**.
 - The CPU remains the limit (~5 FPS). Smooth real-time needs a GPU: the Colab T4 (intended demo setup). Enabling the laptop's
   Maxwell-generation GPU (compute capability 5.0) needs a CUDA PyTorch build that still supports it; that is unverified and not attempted.
+
+---
+
+## 12. Fast Stream Transport (2026-11-22, after operator report "annotated display is too slow, breaking")
+
+**Problem.** Gradio's streaming webcam keeps one frame in flight and makes 4 HTTP exchanges per frame. Over `gradio.live` each
+exchange pays the network round trip, so FPS is set by latency, not by the GPU.
+
+**Decision.** Add `POST /pg/frame` (`pharmaguard/fast_stream.py`) on the same server: body = JPEG, response = annotated JPEG.
+The in-page client (Live monitor → "Start camera") keeps up to N requests in flight (default 3, selectable 1-4).
+- Same origin, so the Gradio login cookie is sent automatically; requests without a valid session return 401 when auth is on.
+- Frames are processed one at a time, strictly in sequence order; a frame that arrives after a newer one was processed is
+  skipped (204). Queueing is bounded by the in-flight limit. A random per-camera-start session id restarts numbering.
+- An earlier "drop a frame if a newer one was already received" rule raced on fast links and discarded ~50% of uploaded
+  frames (measured, 194 skips in 20 s); removed.
+- Plain HTTP rather than WebSockets: no new dependency (`websockets` is not installed here) and works through any HTTPS tunnel.
+- Browser JPEG encode uses synchronous `canvas.toDataURL`: measured 17 ms per 640x480 frame in Chrome, while the async
+  `canvas.toBlob` and `OffscreenCanvas.convertToBlob` took 930-1000 ms.
+- The browser reports its own round trip (`X-PG-RTT-Ms`), shown in the dashboard's latency panel as "browser round trip".
+- The Gradio webcam stream remains as a fallback in a collapsed accordion. Never run both at once (shared pipeline).
+- New config: `stream.fast_jpeg_quality` (default 80).
+
+**Measured (dev laptop, CPU, localhost; `asyncio` client posting the sample photo, network delay simulated in the client):**
+
+| Simulated network RTT | In flight | FPS | round trip p50 |
+|---|---|---|---|
+| 0 ms | 1 | 8.8 | 98 ms |
+| 0 ms | 2 | 9.6 | 201 ms |
+| 300 ms | 1 | 2.5 | 407 ms |
+| 300 ms | 2 | 4.8 | 406 ms |
+| 300 ms | 3 | 7.0 | 420 ms |
+
+Gradio stream path on the same machine, localhost: 185 ms p50, 5.2 FPS. Real Chrome against the local server (synthetic camera
+feed, 3 in flight, CPU): 6 FPS displayed, browser round trip p50 508 ms (CPU queueing). **Not yet measured over `gradio.live`
+on a Colab GPU**; the share tunnel could not be created from the dev machine.
+

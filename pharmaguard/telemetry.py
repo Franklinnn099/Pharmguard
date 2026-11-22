@@ -38,6 +38,8 @@ class TelemetrySnapshot:
     outside_p50_ms: float        # encode + network + browser share of the cycle
     seconds_since_frame: Optional[float]
     interruptions: int           # count of gaps longer than the signal timeout
+    client_rtt_p50_ms: float = 0.0   # browser-measured POST round trip (fast stream only; 0 = not reported)
+    client_rtt_p95_ms: float = 0.0
 
 
 def _pct(values: Deque[float], q: float) -> float:
@@ -58,6 +60,7 @@ class StreamTelemetry:
         self._cycle_ms: Deque[float] = deque(maxlen=self.window)
         self._processing_ms: Deque[float] = deque(maxlen=self.window)
         self._outside_ms: Deque[float] = deque(maxlen=self.window)
+        self._client_rtt_ms: Deque[float] = deque(maxlen=self.window)
         self._last_arrival: Optional[float] = None
         self._last_return: Optional[float] = None
         self.frames_total = 0
@@ -87,6 +90,10 @@ class StreamTelemetry:
         self._last_return = now
         return processing
 
+    def record_client_rtt(self, rtt_ms: float) -> None:
+        """Round trip measured in the browser (capture-encode excluded, upload+process+download included)."""
+        self._client_rtt_ms.append(float(rtt_ms))
+
     def snapshot(self) -> TelemetrySnapshot:
         now = self._clock()
         since = None if self._last_arrival is None else now - self._last_arrival
@@ -108,4 +115,6 @@ class StreamTelemetry:
             outside_p50_ms=round(_pct(self._outside_ms, 50), 1),
             seconds_since_frame=None if since is None else round(since, 2),
             interruptions=self.interruptions,
+            client_rtt_p50_ms=round(_pct(self._client_rtt_ms, 50), 1),
+            client_rtt_p95_ms=round(_pct(self._client_rtt_ms, 95), 1),
         )

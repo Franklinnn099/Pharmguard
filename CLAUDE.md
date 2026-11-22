@@ -46,6 +46,7 @@ pharmguard/
 │   ├── annotator.py                # SecurityAnnotator (shelf overlays, tracks, trails, HUD)
 │   ├── pipeline.py                 # Per-frame orchestration, downscale, stage timings
 │   ├── telemetry.py                # Server-measured end-to-end FPS/latency + signal state
+│   ├── fast_stream.py              # POST /pg/frame pipelined transport + in-page camera client
 │   ├── ui.py                       # Dashboard layout: alarm strip + Live monitor tab, wiring
 │   ├── ui_review.py                # Event review tab: table, details, clip, staff verdicts, FA rate
 │   ├── ui_zones.py                 # Zone editor tab: click-to-draw, apply live, save to configs/
@@ -69,6 +70,7 @@ pharmguard/
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip
+    ├── test_fast_stream.py         # Fast stream ordering, login, real server round trip
     └── conftest.py                 # Redirects alert log so tests never touch logs/
 ```
 
@@ -113,7 +115,7 @@ python benchmark.py
 5. **Alert discipline**: alerts come only from the behaviour engine's per-incident latch (one REVIEW, one ALERT per incident), then pass through `AlertManager.process_behavior_events()` cooldowns as a safety net. Browsing evidence is capped below the review threshold, so never raise that cap without staged-footage evidence. Wording is 'for staff review', never theft or intent.
 6. **No Silent Changes**: Whenever schemas, thresholds, or dependencies change, update `PROJECT_STATUS.md` and `TECHNICAL_DECISIONS.md`.
 7. **Type Annotations**: Use Python type hints throughout all modules. Validate dataclasses or Pydantic models for configuration.
-8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer).
+8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer). The primary live path is the fast stream (`POST /pg/frame`, several frames in flight, §12); keep processing strictly in frame order.
 9. **Measurement honesty**: never print or document a metric that was not measured (e.g. hard-coded "dropped frames"). Label compute-only vs end-to-end figures explicitly.
 10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG` and `PHARMAGUARD_DATA_DIR`. Never commit `data/` (event DB and clips contain people's faces).
 11. **Never open SQLite on a Drive/FUSE mount**: write locally and use `EventStore.mirror()` (backup API).

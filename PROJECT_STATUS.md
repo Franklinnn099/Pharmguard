@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-19 (Priorities 1-5 merged to `main`; Priority 6 on branch `p6-dashboard`)
+**Last updated**: 2026-11-22 (fast stream transport added, TECHNICAL_DECISIONS §12)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 131 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-19)
+**Test suite**: 139 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -18,6 +18,7 @@
 | Person detection on real imagery | Sample photo: ≥2 people detected and tracked (`test_pipeline_on_real_people_image_downscaled`) |
 | Server-side downscale of HD frames to 640 wide | Unit tests (RGB/RGBA/grey 1280x720 → 640x360) |
 | End-to-end FPS/latency telemetry and NO SIGNAL detection | Deterministic fake-clock tests; displayed on dashboard |
+| Fast stream (`POST /pg/frame`, several frames in flight, login enforced, in-order processing) | `tests/test_fast_stream.py` (incl. real server + YOLO); real Chrome against local server with a synthetic camera feed: 6 FPS on CPU |
 | JPEG return + 640x480 capture request served to browser | `test_ui_transport_configuration` inspects the served Gradio config |
 | Tests no longer write to `logs/pharmaguard_alerts.jsonl` | Byte-compared before/after a full test run |
 | Multi-person tracking: no ID switches or swaps on walking at 3-25 FPS, crossing paths, side-by-side walkers, partial (low-conf) and 1 s full occlusion, 5-person crowd | Ground-truth scenario tests (`tests/test_tracker.py`); old-vs-new table in TECHNICAL_DECISIONS §6 |
@@ -65,9 +66,13 @@ round trip p50 **185 ms**, p95 253 ms, **5.2 FPS** (was 236 / 389 ms, 3.8 FPS).
 
 Localhost has no network latency. Over the `gradio.live` tunnel, each frame makes 4 HTTP exchanges, and each one adds a network round trip.
 
+**Fast stream** (TECHNICAL_DECISIONS §12, CPU, localhost, 300 ms network RTT simulated): 2.5 FPS with 1 frame in flight,
+**7.0 FPS with 3 in flight**, round trip ~410 ms either way. Localhost, no delay, 1 in flight: 98 ms p50, 8.8 FPS.
+
 ## 3. Awaiting a live Colab run (requires the project owner; cannot be done from the dev machine)
 
 - [ ] Run `colab/PharmaGuard_Colab.ipynb` on a T4 GPU and record the `benchmark.py` table here.
+- [ ] Use **Start camera** (fast stream) through `gradio.live` on a T4: record Displayed FPS and the browser round trip for 2 and 3 frames in flight.
 - [ ] Stream the laptop webcam through `gradio.live`, then record the dashboard's Delivered FPS, Displayed FPS, cycle p50/p95, and server ms.
 - [ ] Run `python tools/e2e_benchmark.py --url <share-url> --user … --password …` from the laptop and record the output.
 - [ ] Confirm the share URL and the generated password are visible in the launch cell output (launch now uses `!python main.py`).

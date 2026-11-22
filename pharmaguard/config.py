@@ -240,6 +240,10 @@ class StreamConfig(BaseModel):
         description="No frame for this long => camera/connection reported as NO SIGNAL."
     )
     telemetry_window: int = Field(default=60, ge=5, description="Frames used for rolling FPS/latency stats.")
+    fast_jpeg_quality: int = Field(
+        default=80, ge=30, le=95,
+        description="JPEG quality of annotated frames returned on the fast stream (POST /pg/frame)."
+    )
 
 
 class DisplayConfig(BaseModel):

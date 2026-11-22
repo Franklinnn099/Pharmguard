@@ -17,6 +17,7 @@ os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.pipeline import PharmaGuardPipeline
 from pharmaguard.ui import create_pharmaguard_ui, DASHBOARD_HEAD
+from pharmaguard.fast_stream import FastFrameService, install_fast_stream_route
 
 
 def resolve_auth_credentials(args):
@@ -157,6 +158,7 @@ def main():
     print(f"=========================================================\n")
 
     demo.launch(
+        prevent_thread_lock=True,   # so the fast-stream route can be added before we block
         server_name=server_name,
         server_port=args.port,
         share=share_mode,
@@ -167,6 +169,16 @@ def main():
         # Gradio only serves files from explicitly allowed paths.
         allowed_paths=[os.path.abspath(config.recording.data_dir)] if config.recording.enabled else None,
     )
+
+    # Fast stream: one POST per frame, several in flight (pharmaguard/fast_stream.py).
+    service = FastFrameService(
+        process_rgb=lambda rgb: pipeline.process_frame(rgb).annotated_frame_rgb,
+        jpeg_quality=config.stream.fast_jpeg_quality,
+        on_client_rtt=pipeline.telemetry.record_client_rtt,
+    )
+    install_fast_stream_route(demo.server_app, service, require_login=auth_config is not None)
+    print("[PharmaGuard] Fast stream ready: open the dashboard and click 'Start camera'.", flush=True)
+    demo.block_thread()
 
 
 if __name__ == "__main__":

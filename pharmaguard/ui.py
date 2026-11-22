@@ -21,6 +21,7 @@ from pharmaguard.telemetry import TelemetrySnapshot
 from pharmaguard.alarm import AlarmSnapshot
 from pharmaguard.ui_review import build_review_tab
 from pharmaguard.ui_zones import build_zones_tab
+from pharmaguard.fast_stream import FAST_STREAM_HEAD, FAST_STREAM_HTML
 
 
 # Custom styling for professional pharmacy security console
@@ -93,9 +94,12 @@ CLIENT_FPS_HEAD = """
   };
   const loop = () => { tick(); requestAnimationFrame(loop); };
   requestAnimationFrame(loop);
+  let fastSeen = 0;
   setInterval(() => {
     const el = document.getElementById('pg-client-fps');
-    if (el) el.textContent = painted.toFixed(0);
+    const fastTotal = window.__pgFastPainted || 0;   // frames painted by the fast stream canvas
+    if (el) el.textContent = (painted + fastTotal - fastSeen).toFixed(0);
+    fastSeen = fastTotal;
     painted = 0;
   }, 1000);
 })();
@@ -157,7 +161,7 @@ ALARM_HEAD = """
 </script>
 """
 
-DASHBOARD_HEAD = CLIENT_FPS_HEAD + ALARM_HEAD
+DASHBOARD_HEAD = CLIENT_FPS_HEAD + ALARM_HEAD + FAST_STREAM_HEAD
 
 SIGNAL_LABELS = {
     "LIVE": "LIVE",
@@ -214,6 +218,12 @@ def format_telemetry(tele: TelemetrySnapshot, last: Optional[PipelineOutput], de
     res = last.metadata.get("resolution", "-") if last else "-"
     in_res = last.metadata.get("input_resolution", "-") if last else "-"
     status = f"{SIGNAL_LABELS.get(tele.signal, tele.signal)} | {device.upper()}"
+    # Fast stream (pipelined POSTs): the browser reports its own round trip, which is the honest
+    # network figure. The arrival-gap "outside" share is only meaningful with one frame in flight.
+    if tele.client_rtt_p50_ms > 0:
+        network = f"browser round trip p50 {tele.client_rtt_p50_ms:.0f} / p95 {tele.client_rtt_p95_ms:.0f} ms"
+    else:
+        network = f"transport+encode {tele.outside_p50_ms:.0f} ms"
     if tele.interruptions:
         status += f" | {tele.interruptions} interruption(s)"
     return {
@@ -224,7 +234,7 @@ def format_telemetry(tele: TelemetrySnapshot, last: Optional[PipelineOutput], de
         "latency": (
             f"cycle p50 {tele.cycle_p50_ms:.0f} / p95 {tele.cycle_p95_ms:.0f} ms | "
             f"server {tele.processing_p50_ms:.0f} ms (det {timings.get('detect_ms', 0):.0f}) | "
-            f"transport+encode {tele.outside_p50_ms:.0f} ms | {in_res}->{res}"
+            f"{network} | {in_res}->{res}"
         ) if live else "-",
     }
 
@@ -399,27 +409,33 @@ def create_pharmaguard_ui(
                 with gr.Row():
                     # Left column: Video streams
                     with gr.Column(scale=7):
-                        with gr.Row():
-                            webcam_input = gr.Image(
-                                sources=["webcam"],
-                                streaming=True,
-                                label="1. Camera input (click to start webcam)",
-                                type="numpy",
-                                webcam_options=gr.WebcamOptions(
-                                    mirror=False,
-                                    constraints={"video": {
-                                        "width": {"ideal": stream_cfg.capture_width},
-                                        "height": {"ideal": stream_cfg.capture_height},
-                                    }},
-                                ),
-                            )
-                            annotated_output = gr.Image(
-                                label="2. PharmaGuard annotated output",
-                                type="numpy",
-                                format=stream_cfg.output_format,
-                                interactive=False,
-                                elem_id="pg-output",
-                            )
+                        # Primary path: pipelined HTTP fast stream (pharmaguard/fast_stream.py).
+                        gr.HTML("<div style='font-weight:600;color:#38bdf8;font-size:13px;'>"
+                                "Live camera (fast stream) - annotated output</div>")
+                        gr.HTML(FAST_STREAM_HTML)
+                        with gr.Accordion("Fallback: Gradio webcam stream (slower; use only if the fast "
+                                          "stream does not start; never run both at once)", open=False):
+                            with gr.Row():
+                                webcam_input = gr.Image(
+                                    sources=["webcam"],
+                                    streaming=True,
+                                    label="1. Camera input (click to start webcam)",
+                                    type="numpy",
+                                    webcam_options=gr.WebcamOptions(
+                                        mirror=False,
+                                        constraints={"video": {
+                                            "width": {"ideal": stream_cfg.capture_width},
+                                            "height": {"ideal": stream_cfg.capture_height},
+                                        }},
+                                    ),
+                                )
+                                annotated_output = gr.Image(
+                                    label="2. PharmaGuard annotated output",
+                                    type="numpy",
+                                    format=stream_cfg.output_format,
+                                    interactive=False,
+                                    elem_id="pg-output",
+                                )
 
                     # Right column: Telemetry & Alert Operations Console
                     with gr.Column(scale=5):
