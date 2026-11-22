@@ -31,6 +31,16 @@ POSES: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]] = {
     "pocket_R": ((-45, 355), (22, 298)),
     "bag_R": ((-45, 355), (105, 310)),
     "hands_hidden": ((-45, 355), (45, 355)),
+    # Realistic relaxed hanging arm: wrist only ~0.13 torso below the hip (inside the pocket band), arm straight.
+    "hang_R": ((-45, 355), (45, 308)),
+    # Hand pushed into the right front pocket: wrist at the hip, elbow bent and flared out.
+    "pocket_bent_R": ((-45, 355), (22, 298)),
+}
+
+# Optional elbow positions (left, right) per pose; poses without an entry have no visible elbows.
+ELBOWS: Dict[str, Tuple[Tuple[float, float], Tuple[float, float]]] = {
+    "hang_R": ((-42, 245), (42, 245)),
+    "pocket_bent_R": ((-42, 245), (60, 240)),
 }
 
 
@@ -44,6 +54,10 @@ def skeleton(cx: float, pose: str, wrist_conf: float = 0.9) -> np.ndarray:
     c = 0.05 if pose == "hands_hidden" else wrist_conf
     kp[9] = (cx + lx, ly, c)
     kp[10] = (cx + rx, ry, c)
+    if pose in ELBOWS:
+        (elx, ely), (erx, ery) = ELBOWS[pose]
+        kp[7] = (cx + elx, ely, 0.9)
+        kp[8] = (cx + erx, ery, 0.9)
     return kp
 
 

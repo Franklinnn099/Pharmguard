@@ -53,8 +53,8 @@ The report lists the IDs issued and every REVIEW/ALERT with its reasons. Fill in
 | 4 | Browse | Reach in 4-5 times, look at items at chest height, put them back | Contacts, **no REVIEW/ALERT** | |
 | 5 | Pick up & return | Take an item, hold it at the hip 2 s, put it back (within 4 s of reaching the hip), leave | "returned to shelf", **no alerts** | |
 | 6 | Reach own bag | With a handbag on the shoulder, open it without touching the shelf | BAG_REACH info only, **no alerts** | |
-| 7a | Item to bag (staged) | Reach in, within 1-2 s put the hand into the handbag, stay or walk out | **REVIEW at once, then one ALERT** 4 s later (or on leaving view) | |
-| 7b | Item to pocket (staged) | Reach in, within 1-2 s hand to front pocket and hold ~1 s, stay or walk out | **One ALERT** 4 s after pocketing (or on leaving view) | |
+| 7a | Item to bag (staged) | Reach in, within 1-2 s put the hand into the handbag, stay or walk out | **REVIEW at once, then one ALERT** ~2.5 s later (or on leaving view) | |
+| 7b | Item to pocket (staged) | Reach in, within 1-2 s hand to front pocket and hold ~1 s, stay or walk out | **One ALERT** ~3 s after pocketing (or on leaving view) | |
 | 8 | People cross | Two actors walk past each other in front of the shelf | IDs unchanged after crossing | |
 | 9 | Occlusion | Actor walks behind another actor or a pillar for ~1 s | Same ID afterwards | |
 | 10 | Camera interruption | Stop the webcam in the browser for 5 s, restart | Status NO SIGNAL, then LIVE; `1 interruption(s)` | |
@@ -67,7 +67,7 @@ In the **Event review** tab, mark every recorded event **Confirmed** or **False 
 ## 4. Known false-positive and miss modes (state them honestly if asked)
 
 - **Item held low at the hip for more than 4 s, or carried at hip height to a till**: this now raises an ALERT (rule: shelf -> pocket/bag and not returned within 4 s, TECHNICAL_DECISIONS §13). Hold items at chest height when examining them during the demo.
-- **A relaxed hand resting at the hip** is geometrically "at pocket". It only counts within 3 s after the same hand left the shelf.
+- **A relaxed hanging hand** is not a pocket since §20 (the arm must be bent at the elbow). A hand resting bent at the hip within 3 s after the same hand left the shelf still counts.
 - **Concealment with the arm hidden from the camera** (behind the body) is missed. Camera placement (section 1) matters.
 - **Small items palmed without visible arm movement** are missed: the system tracks hands, not products.
 - Bags are COCO "handbag/backpack/suitcase". Unusual bags or bags held low and out of frame may not be detected; then only the weaker pocket path applies.

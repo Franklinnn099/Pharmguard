@@ -88,6 +88,35 @@ def test_shelf_to_partly_hidden_pocket_raises_alarm():
     assert len(run.of(E.SUSPICION_ALERT)) == 1
 
 
+def test_geometry_relaxed_hanging_arm_is_not_pocket_but_bent_arm_is():
+    """Operator report: hand hanging at the side counted as pocket. The wrist of a hanging arm is inside the
+    hip band; the straight arm is what tells it apart."""
+    hang = {h.side: h for h in _obs("hang_R").hands}["R"]
+    assert hang.reach_point is not None and not hang.in_pocket
+    bent = {h.side: h for h in _obs("pocket_bent_R").hands}["R"]
+    assert bent.in_pocket
+
+
+def test_shelf_contact_then_arm_hanging_relaxed_raises_nothing():
+    script = [(1.0, "rest", None), (1.5, "reach_R", None), (8.0, "hang_R", None)]
+    run = run_actors([Actor(1, 320, script, leave_at_end=False)])
+    assert run.of(E.SHELF_CONTACT)
+    assert run.of(E.HAND_TO_POCKET) == []
+    assert run.severities() == []
+
+
+def test_shelf_to_pocket_with_bent_elbow_alarms_quickly():
+    script = [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None), (0.6, "pocket_bent_R", None),
+              (6.0, "hang_R", None)]
+    run = run_actors([Actor(1, 320, script, leave_at_end=False)])
+    pocket = run.of(E.HAND_TO_POCKET)
+    alerts = run.of(E.SUSPICION_ALERT)
+    assert len(pocket) == 1 and len(alerts) == 1
+    left_shelf = run.of(E.SHELF_CONTACT)[0].timestamp + 1.5
+    # Hand reaches the pocket ~0.3 s after leaving the shelf; alarm = hold 0.4 s + keep window 2.5 s later.
+    assert alerts[0].timestamp - left_shelf <= 0.3 + CFG.pocket_hold_sec + CFG.keep_confirm_sec + 0.5
+
+
 def test_geometry_low_confidence_wrists_are_ignored():
     for h in _obs("hands_hidden").hands:
         assert not h.visible and h.shelf_zone is None

@@ -76,6 +76,7 @@ def suppress_duplicate_poses(result: "DetectionResult", kp_conf: float = 0.3, di
 
 # COCO-17 keypoint indices used by the behaviour engine.
 KP_L_SHOULDER, KP_R_SHOULDER = 5, 6
+KP_L_ELBOW, KP_R_ELBOW = 7, 8
 KP_L_WRIST, KP_R_WRIST = 9, 10
 KP_L_HIP, KP_R_HIP = 11, 12
 

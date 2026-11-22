@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 
 from pharmaguard.config import BehaviorConfig, ShelfZone
-from pharmaguard.detector import KP_L_HIP, KP_L_SHOULDER, KP_L_WRIST, KP_R_HIP, KP_R_SHOULDER, KP_R_WRIST
+from pharmaguard.detector import (KP_L_ELBOW, KP_L_HIP, KP_L_SHOULDER, KP_L_WRIST, KP_R_ELBOW, KP_R_HIP,
+                                  KP_R_SHOULDER, KP_R_WRIST)
 from pharmaguard.tracker import TrackedPerson
 
 Point = Tuple[float, float]
@@ -49,6 +50,8 @@ class PersonObservation:
     near_zones: List[str] = field(default_factory=list)   # body overlaps these shelf zones
     pocket_centers: List[Point] = field(default_factory=list)
     pocket_radius: float = 0.0
+    # Pocket regions as boxes [x1, y1, x2, y2] in pixels (one per visible hip), for the test and the overlay.
+    pocket_boxes: List[np.ndarray] = field(default_factory=list)
     torso_box: Optional[np.ndarray] = None
     bag_boxes: List[np.ndarray] = field(default_factory=list)
     hips_visible: bool = False
@@ -85,6 +88,22 @@ def _expand(box: np.ndarray, frac: float) -> np.ndarray:
 
 def _in_box(pt: Point, box: np.ndarray) -> bool:
     return box[0] <= pt[0] <= box[2] and box[1] <= pt[1] <= box[3]
+
+
+def _arm_straight(kps: np.ndarray, s_idx: int, e_idx: int, wrist: Point, min_conf: float,
+                  straight_deg: float) -> bool:
+    """True if shoulder-elbow-wrist is (nearly) a straight line: a hanging arm, not a hand in a pocket.
+    False when the shoulder or elbow is not visible (then the arm shape is unknown and not used)."""
+    sh, el = _kp(kps, s_idx, min_conf), _kp(kps, e_idx, min_conf)
+    if sh is None or el is None:
+        return False
+    a = np.array(sh) - np.array(el)
+    b = np.array(wrist) - np.array(el)
+    na, nb = float(np.linalg.norm(a)), float(np.linalg.norm(b))
+    if na < 1.0 or nb < 1.0:
+        return False
+    ang = float(np.degrees(np.arccos(np.clip(np.dot(a, b) / (na * nb), -1.0, 1.0))))
+    return ang >= straight_deg
 
 
 def bags_for_person(person_box: np.ndarray, bag_boxes: Sequence[np.ndarray]) -> List[np.ndarray]:
@@ -132,11 +151,14 @@ def observe_person(person: TrackedPerson, zone_polys: Dict[str, np.ndarray],
     pocket_hips = [p for p in (_kp(kps, KP_L_HIP, cfg.hip_min_conf), _kp(kps, KP_R_HIP, cfg.hip_min_conf)) if p]
     obs.pocket_centers = pocket_hips
     obs.hips_visible = bool(pocket_hips)
-    hip_line = max(p[1] for p in pocket_hips) if pocket_hips else None
     obs.pocket_radius = cfg.pocket_radius_torso * torso
+    obs.pocket_boxes = [np.array([c[0] - obs.pocket_radius, c[1] - cfg.pocket_max_above_hip_torso * torso,
+                                  c[0] + obs.pocket_radius, c[1] + cfg.pocket_max_below_hip_torso * torso], np.float32)
+                        for c in pocket_hips]
     obs.bag_boxes = [_expand(b, cfg.bag_box_expand) for b in bags_for_person(box, bag_boxes)]
 
-    for side, idx in (("L", KP_L_WRIST), ("R", KP_R_WRIST)):
+    for side, idx, e_idx, s_idx in (("L", KP_L_WRIST, KP_L_ELBOW, KP_L_SHOULDER),
+                                    ("R", KP_R_WRIST, KP_R_ELBOW, KP_R_SHOULDER)):
         conf = float(kps[idx][2])
         pt = _kp(kps, idx, mc)
         reach = pt or _kp(kps, idx, cfg.pocket_wrist_min_conf)
@@ -149,10 +171,8 @@ def observe_person(person: TrackedPerson, zone_polys: Dict[str, np.ndarray],
                         hand.shelf_zone = name
                     break
         if reach is not None:
-            low_enough = (hip_line is not None and
-                          reach[1] >= min(c[1] for c in pocket_hips) - cfg.pocket_max_above_hip_torso * torso)
-            hand.in_pocket = low_enough and any(
-                np.hypot(reach[0] - c[0], reach[1] - c[1]) <= obs.pocket_radius for c in pocket_hips)
+            in_region = any(_in_box(reach, b) for b in obs.pocket_boxes)
+            hand.in_pocket = in_region and not _arm_straight(kps, s_idx, e_idx, reach, mc, cfg.pocket_straight_arm_deg)
             hand.in_bag = any(_in_box(reach, b) for b in obs.bag_boxes)
         obs.hands.append(hand)
     return obs

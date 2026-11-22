@@ -201,8 +201,7 @@ FAST_STREAM_HEAD = """
       const col = (lvl === 0 && p.in_shelf) ? 'rgb(255,140,0)' : LEVEL[lvl];
       g.strokeStyle = col; g.lineWidth = lvl === 2 ? 4 : 2; g.strokeRect(x1, y1, x2-x1, y2-y1);
       for (const c of p.pockets || []) {
-        g.beginPath(); g.arc(c.x*W, c.y*H, Math.max(4, c.r*W), 0, 2*Math.PI);
-        g.strokeStyle = 'rgb(200,0,200)'; g.lineWidth = 1; g.stroke();
+        g.strokeStyle = 'rgb(200,0,200)'; g.lineWidth = 1; g.strokeRect(c[0]*W, c[1]*H, (c[2]-c[0])*W, (c[3]-c[1])*H);
       }
       if (p.hips_visible === false) label(g, 'hips not visible: pocket check off', x1 + 4, y2 - 6, 'rgb(255,200,0)');
       for (const h of p.hands || []) {
@@ -239,8 +238,7 @@ FAST_STREAM_HEAD = """
       out.box = p.box.map((v, i) => lerp(q.box[i], v, f));
       const qh = {}; for (const h of q.hands || []) qh[h.side] = h;
       out.hands = (p.hands || []).map(h => qh[h.side] ? Object.assign({}, h, {x: lerp(qh[h.side].x, h.x, f), y: lerp(qh[h.side].y, h.y, f)}) : h);
-      out.pockets = (p.pockets || []).map((c, i) => (q.pockets || [])[i] ?
-        Object.assign({}, c, {x: lerp(q.pockets[i].x, c.x, f), y: lerp(q.pockets[i].y, c.y, f)}) : c);
+      out.pockets = (p.pockets || []).map((c, i) => (q.pockets || [])[i] ? c.map((v, k) => lerp(q.pockets[i][k], v, f)) : c);
       return out;
     });
     return Object.assign({}, d1.o, {persons});

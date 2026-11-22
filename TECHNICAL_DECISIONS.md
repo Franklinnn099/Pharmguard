@@ -558,3 +558,26 @@ confidence) is kept, so the full skeleton with hips survives. Tests: same body t
 partly behind the other (boxes overlapping ~60%, skeletons 50 px apart) -> 2; sample photo unchanged (3 people either way).
 **Not verified on the operator's footage**; a dashed "(occluded)" second box would instead be a lost-track ghost (shown up
 to `tracker.lost_track_seconds` = 2 s) and is not changed here.
+
+---
+
+## 20. Pocket = Bent Elbow; Faster Alarm (2026-11-22, operator: alarm late, dots late, alarms with nothing taken, "pocket when hand at side", some real pocketing missed; runtime CUDA)
+
+**Root cause of the false alarms:** §14 widened the pocket disc, and a relaxed hanging hand fell inside it. Shelf contact, then
+simply lowering the arm, read as shelf -> pocket -> not returned -> ALERT. Anthropometrically a relaxed wrist hangs only
+~6-8 cm below the hip joint, so position alone cannot separate it from a hand in a pocket.
+
+**Changes (`interaction.py`, `BehaviorConfig`):**
+- Pocket region is a box per hip: +-0.40 torso horizontally, 0.15 torso above to 0.25 below the hip keypoint (was a 0.42 disc).
+- **Arm shape:** a hand only counts as in a pocket if the shoulder-elbow-wrist angle is < 160 deg (`pocket_straight_arm_deg`).
+  A hanging arm is straight. Skipped when shoulder/elbow are not visible.
+- Partly hidden wrist accepted from confidence 0.20 (was 0.10: too noisy).
+- Faster: `pocket_hold_sec` 0.6 -> 0.4 (quick dips into a pocket were missed), `keep_confirm_sec` 4.0 -> 2.5. Alarm now comes
+  ~0.4 + 2.5 s after the hand reaches the pocket, plus network lag.
+- Overlay and server annotation draw the pocket boxes.
+
+**Tests:** scripted skeletons now have elbows for two new poses. Shelf contact then a relaxed straight arm with the wrist inside
+the band for 8 s: nothing (with the arm check disabled the same script raises an ALERT, i.e. the test reproduces the report).
+Shelf -> pocket with a bent elbow: one ALERT within hold + keep window. All earlier scenarios unchanged (155 tests).
+**Not verified on real footage**; the 160 deg threshold and band are first estimates for calibration on staged clips.
+"Dots change late" is network lag (GPU compute is not the bottleneck); not changed here.

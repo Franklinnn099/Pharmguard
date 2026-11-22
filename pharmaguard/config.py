@@ -136,12 +136,19 @@ class BehaviorConfig(BaseModel):
         description="A wrist must stay inside / outside a shelf zone this long for a contact to start / end.")
     carry_window_sec: float = Field(default=3.0, gt=0.0,
         description="After a hand leaves the shelf, reaching a pocket/bag within this window counts as a transfer.")
-    pocket_hold_sec: float = Field(default=0.6, ge=0.0,
+    pocket_hold_sec: float = Field(default=0.4, ge=0.0,
         description="Wrist must stay in the waist/pocket region this long (filters arms swinging past).")
     bag_hold_sec: float = Field(default=0.3, ge=0.0)
-    pocket_radius_torso: float = Field(default=0.42, gt=0.0,
-        description="Pocket region = disc around each hip keypoint, radius in torso lengths (shoulder-hip).")
-    pocket_wrist_min_conf: float = Field(default=0.10, ge=0.0, le=1.0,
+    pocket_radius_torso: float = Field(default=0.40, gt=0.0,
+        description="Pocket region half-width around each hip keypoint, in torso lengths (shoulder-hip).")
+    pocket_max_below_hip_torso: float = Field(default=0.25, ge=0.0,
+        description="Wrist may be at most this far BELOW the hip keypoint to count as pocket.")
+    pocket_straight_arm_deg: float = Field(default=160.0, ge=90.0, le=180.0,
+        description="A hand only counts as in a pocket if the elbow is bent: shoulder-elbow-wrist angle below this. "
+                    "A relaxed hanging arm is straight (~170-180 deg) with the wrist only a few cm below the hip "
+                    "joint, so position alone cannot tell it from a hand in a pocket. Skipped if the elbow or "
+                    "shoulder is not visible.")
+    pocket_wrist_min_conf: float = Field(default=0.20, ge=0.0, le=1.0,
         description="Wrist confidence accepted for the pocket/bag test only. A hand going into a pocket or bag is "
                     "partly hidden, so its wrist confidence drops below keypoint_min_conf. Shelf contact stays strict.")
     hip_min_conf: float = Field(default=0.25, ge=0.0, le=1.0,
@@ -168,7 +175,7 @@ class BehaviorConfig(BaseModel):
     w_hand_to_pocket: float = 0.45
     w_hand_to_bag: float = 0.70
     w_exit_after_concealment: float = 0.30
-    keep_confirm_sec: float = Field(default=4.0, gt=0.0,
+    keep_confirm_sec: float = Field(default=2.5, gt=0.0,
         description="After shelf -> pocket/bag, if that hand does not touch the shelf again within this time "
                     "(or the person leaves view), the item counts as kept and w_item_kept is added.")
     w_item_kept: float = Field(default=0.55,

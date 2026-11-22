@@ -321,8 +321,7 @@ class PharmaGuardPipeline:
                 obs = view.observation
                 if obs is not None and obs.has_pose:
                     entry["hips_visible"] = bool(obs.hips_visible)
-                    entry["pockets"] = [{"x": nx(c[0]), "y": ny(c[1]), "r": nx(obs.pocket_radius)}
-                                        for c in obs.pocket_centers]
+                    entry["pockets"] = [[nx(b[0]), ny(b[1]), nx(b[2]), ny(b[3])] for b in obs.pocket_boxes]
             persons.append(entry)
         alarm = self.alarm.snapshot()
         return {

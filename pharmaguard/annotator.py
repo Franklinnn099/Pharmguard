@@ -104,9 +104,9 @@ class SecurityAnnotator:
             obs = getattr(view, "observation", None)
             if obs is not None and obs.has_pose:
                 if obs.hips_visible:
-                    for c in obs.pocket_centers:
-                        cv2.circle(frame, (int(c[0]), int(c[1])), max(4, int(obs.pocket_radius)), (200, 0, 200), 1,
-                                   lineType=cv2.LINE_AA)
+                    for pb in obs.pocket_boxes:
+                        cv2.rectangle(frame, (int(pb[0]), int(pb[1])), (int(pb[2]), int(pb[3])), (200, 0, 200), 1,
+                                      lineType=cv2.LINE_AA)
                 else:
                     cv2.putText(frame, "hips not visible: pocket check off", (x1 + 4, min(y2 - 6, frame.shape[0] - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, lineType=cv2.LINE_AA)
