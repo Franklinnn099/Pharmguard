@@ -315,7 +315,8 @@ class PharmaGuardPipeline:
                     if pt is None:
                         continue
                     state = "pocket" if (hand.in_pocket or hand.in_bag) else ("shelf" if hand.shelf_zone else "free")
-                    hands.append({"x": nx(pt[0]), "y": ny(pt[1]), "state": state, "weak": hand.point is None})
+                    hands.append({"side": hand.side, "x": nx(pt[0]), "y": ny(pt[1]), "state": state,
+                                  "weak": hand.point is None})
                 entry["hands"] = hands
                 obs = view.observation
                 if obs is not None and obs.has_pose:

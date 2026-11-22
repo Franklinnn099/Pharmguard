@@ -141,15 +141,21 @@ def install_fast_stream_route(fastapi_app: Any, service: FastFrameService, requi
 
 
 # Browser client. Wires up the elements rendered by FAST_STREAM_HTML (event delegation, because
-# Gradio renders HTML blocks after the head scripts run). Default display mode 'overlay' paints the
-# browser's own camera frames at full rate and draws the latest detections (JSON) on top; 'image'
-# shows the server-annotated JPEGs.
+# Gradio renders HTML blocks after the head scripts run). Display modes: 'synced' (default) shows the
+# browser's own camera frames delayed by the measured detection lag with detections interpolated onto
+# them; 'live' shows frames immediately with detections extrapolated; 'image' shows server-annotated JPEGs.
 FAST_STREAM_HEAD = """
 <script>
 (() => {
   const S = {session:'', running:false, stream:null, seq:0, inflight:0, maxInflight:3, lastPainted:-1,
              painted:0, updates:0, rtts:[], lastRtt:null, errors:0, timer:null, cap:null, capCtx:null,
-             mode:'overlay', overlay:null, overlayAt:0, lastVideoTime:-1, raf:null};
+             mode:'synced', overlay:null, overlayAt:0, lastVideoTime:-1, raf:null,
+             frames:[], dets:[], sentAt:{}, delay:0, shownT:-1, framePending:false};
+  // Display modes: 'synced' = video delayed by the measured round trip so boxes sit exactly on the
+  // frame they were detected in (positions interpolated between detections); 'live' = video not delayed,
+  // boxes extrapolated forward from their recent motion; 'image' = server-annotated JPEGs.
+  const OVERLAY_MODES = {synced: true, live: true};
+  const BUFFER_MS = 2500, MAX_PREDICT_MS = 700;
   const $ = (id) => document.getElementById(id);
   const say = (msg, color) => { const el = $('pg-fast-msg'); if (el) { el.textContent = msg; el.style.color = color || '#94a3b8'; } };
   const median = (a) => { if (!a.length) return 0; const s = [...a].sort((x,y)=>x-y); return s[Math.floor(s.length/2)]; };
@@ -218,19 +224,87 @@ FAST_STREAM_HEAD = """
                      : 'PHARMAGUARD [LIVE] | TRACKED: ' + n + ' | ALERTS: ' + (o.alerts || 0), 10, 16);
   }
 
-  // Smooth mode: paint every new camera frame immediately, with the latest detections on top.
+  // ---- motion: blend (synced) or extrapolate (live) detections between server updates
+  const lerp = (a, b, f) => a + (b - a) * f;
+  // Detection overlay at time t from detections d0 (time t0) and d1 (t1). f in [0,1] interpolates,
+  // f > 1 extrapolates. Persons, hands and pockets are matched by person id / hand side / index.
+  function blend(d0, d1, f) {
+    if (!d1 || d1 === d0) return d0.o;
+    const prev = {}; for (const p of d0.o.persons || []) prev[p.id] = p;
+    const persons = (d1.o.persons || []).map(p => {
+      const q = prev[p.id];
+      if (!q || q.occluded || p.occluded) return p;
+      const out = Object.assign({}, p);
+      out.box = p.box.map((v, i) => lerp(q.box[i], v, f));
+      const qh = {}; for (const h of q.hands || []) qh[h.side] = h;
+      out.hands = (p.hands || []).map(h => qh[h.side] ? Object.assign({}, h, {x: lerp(qh[h.side].x, h.x, f), y: lerp(qh[h.side].y, h.y, f)}) : h);
+      out.pockets = (p.pockets || []).map((c, i) => (q.pockets || [])[i] ?
+        Object.assign({}, c, {x: lerp(q.pockets[i].x, c.x, f), y: lerp(q.pockets[i].y, c.y, f)}) : c);
+      return out;
+    });
+    return Object.assign({}, d1.o, {persons});
+  }
+  function overlayAt(t) {
+    const d = S.dets; if (!d.length) return null;
+    if (S.mode === 'live') {
+      // Extrapolate the two newest detections forward to "now" (capped, so a person who stops
+      // is not flung across the screen).
+      const b = d[d.length - 1], a = d.length > 1 ? d[d.length - 2] : null;
+      if (!a || b.t <= a.t) return b.o;
+      const ahead = Math.min(t - b.t, MAX_PREDICT_MS);
+      return blend(a, b, 1 + ahead / (b.t - a.t));
+    }
+    // Synced: the two detections around the displayed frame's capture time.
+    let i = d.length - 1; while (i > 0 && d[i].t > t) i--;
+    const a = d[i], b = d[i + 1];
+    if (a.t > t || !b) return a.o;
+    return blend(a, b, (t - a.t) / Math.max(1, b.t - a.t));
+  }
+
+  // Keep recent camera frames (synced mode shows them `delay` ms late).
+  function bufferFrame(video, t) {
+    if (S.framePending) return;
+    S.framePending = true;
+    createImageBitmap(video).then(bmp => {
+      S.frames.push({t, bmp});
+      while (S.frames.length && t - S.frames[0].t > BUFFER_MS) { const f = S.frames.shift(); f.bmp.close && f.bmp.close(); }
+    }).catch(() => {}).finally(() => { S.framePending = false; });
+  }
+  function clearFrames() { for (const f of S.frames) f.bmp.close && f.bmp.close(); S.frames = []; S.shownT = -1; }
+
   function render() {
-    if (!S.running || S.mode !== 'overlay') { S.raf = null; return; }
+    if (!S.running || !OVERLAY_MODES[S.mode]) { S.raf = null; return; }
     const video = $('pg-fast-video'), out = $('pg-fast-out');
-    if (video && out && video.readyState >= 2 && video.videoWidth && video.currentTime !== S.lastVideoTime) {
-      S.lastVideoTime = video.currentTime;
+    const now = performance.now();
+    if (video && out && video.readyState >= 2 && video.videoWidth) {
       if (out.width !== video.videoWidth || out.height !== video.videoHeight) {
         out.width = video.videoWidth; out.height = video.videoHeight;
       }
       const g = out.getContext('2d');
-      g.drawImage(video, 0, 0, out.width, out.height);
-      if (S.overlay) drawOverlay(g, out.width, out.height, S.overlay, performance.now() - S.overlayAt > 1500);
-      markPainted();
+      const fresh = video.currentTime !== S.lastVideoTime;
+      if (fresh) S.lastVideoTime = video.currentTime;
+      if (S.mode === 'live') {
+        if (fresh) {
+          g.drawImage(video, 0, 0, out.width, out.height);
+          const o = overlayAt(now);
+          if (o) { drawOverlay(g, out.width, out.height, o, now - S.overlayAt > 1500); window.__pgFastLastOverlay = o; }
+          markPainted();
+        }
+      } else {
+        if (fresh) bufferFrame(video, now);
+        // Show the newest buffered frame that is at least `delay` old.
+        const target = now - S.delay;
+        let f = null;
+        for (let i = S.frames.length - 1; i >= 0; i--) { if (S.frames[i].t <= target) { f = S.frames[i]; break; } }
+        if (!f && S.frames.length) f = S.frames[0];
+        if (f && f.t !== S.shownT) {
+          S.shownT = f.t;
+          g.drawImage(f.bmp, 0, 0, out.width, out.height);
+          const o = overlayAt(f.t);
+          if (o) { drawOverlay(g, out.width, out.height, o, now - S.overlayAt > 1500); window.__pgFastLastOverlay = o; }
+          markPainted();
+        }
+      }
     }
     S.raf = requestAnimationFrame(render);
   }
@@ -243,8 +317,9 @@ FAST_STREAM_HEAD = """
     if (!S.cap) { S.cap = document.createElement('canvas'); S.capCtx = S.cap.getContext('2d'); }
     S.cap.width = video.videoWidth; S.cap.height = video.videoHeight;
     S.capCtx.drawImage(video, 0, 0);
+    const capturedAt = performance.now();
     const seq = S.seq++;
-    const mode = S.mode;
+    const mode = OVERLAY_MODES[S.mode] ? 'overlay' : 'image';
     S.inflight++;
     const t0 = performance.now();
     try {
@@ -262,10 +337,20 @@ FAST_STREAM_HEAD = """
         S.lastRtt = rtt; S.rtts.push(rtt); if (S.rtts.length > 60) S.rtts.shift();
         if ((res.headers.get('content-type') || '').includes('json')) {
           const o = await res.json();
-          if (seq > S.lastPainted) { S.lastPainted = seq; S.overlay = o; S.overlayAt = performance.now(); S.updates++; }
+          if (seq > S.lastPainted) {
+            S.lastPainted = seq; S.overlay = o; S.overlayAt = performance.now(); S.updates++;
+            S.dets.push({t: capturedAt, o});
+            while (S.dets.length > 2 && capturedAt - S.dets[0].t > BUFFER_MS + 1000) S.dets.shift();
+            // Sync delay = capture->result lag + spacing between detections (so a detection on each side of
+            // the displayed frame exists), smoothed so the video does not jump. Capped at 2 s.
+            const lag = performance.now() - capturedAt;
+            const n = S.dets.length, gap = n > 1 ? S.dets[n-1].t - S.dets[n-2].t : 0;
+            const want = Math.min(2000, lag + gap + 30);
+            S.delay = S.delay ? S.delay * 0.92 + want * 0.08 : want;
+          }
         } else {
           const img = await res.blob();
-          if (seq > S.lastPainted && S.mode === 'image') {
+          if (seq > S.lastPainted && !OVERLAY_MODES[S.mode]) {
             S.lastPainted = seq;
             const bmp = await createImageBitmap(img);
             const out = $('pg-fast-out');
@@ -298,11 +383,12 @@ FAST_STREAM_HEAD = """
     const video = $('pg-fast-video');
     video.srcObject = S.stream; await video.play().catch(() => {});
     const sel = $('pg-fast-inflight'); S.maxInflight = sel ? parseInt(sel.value, 10) || 3 : 3;
-    const md = $('pg-fast-mode'); S.mode = md ? md.value : 'overlay';
+    const md = $('pg-fast-mode'); S.mode = md ? md.value : 'synced';
     S.session = Math.random().toString(36).slice(2) + Date.now().toString(36);
     S.running = true; S.seq = 0; S.lastPainted = -1; S.rtts = []; S.lastRtt = null; S.errors = 0; S.overlay = null;
+    S.dets = []; S.delay = 0; clearFrames();
     S.timer = setInterval(sendOne, 15);
-    if (S.mode === 'overlay' && !S.raf) S.raf = requestAnimationFrame(render);
+    if (OVERLAY_MODES[S.mode] && !S.raf) S.raf = requestAnimationFrame(render);
     say('Streaming - detection running on the server', '#34d399');
   }
 
@@ -310,6 +396,7 @@ FAST_STREAM_HEAD = """
     S.running = false;
     if (S.timer) clearInterval(S.timer); S.timer = null;
     if (S.stream) S.stream.getTracks().forEach(t => t.stop()); S.stream = null;
+    clearFrames(); S.dets = [];
     say('Stopped', '#94a3b8');
   }
 
@@ -323,18 +410,20 @@ FAST_STREAM_HEAD = """
     if (!ev.target) return;
     if (ev.target.id === 'pg-fast-inflight') S.maxInflight = parseInt(ev.target.value, 10) || 3;
     if (ev.target.id === 'pg-fast-mode') {
-      S.mode = ev.target.value; S.overlay = null;
-      if (S.running && S.mode === 'overlay' && !S.raf) S.raf = requestAnimationFrame(render);
+      S.mode = ev.target.value; S.overlay = null; S.dets = []; S.delay = 0; clearFrames();
+      if (S.running && OVERLAY_MODES[S.mode] && !S.raf) S.raf = requestAnimationFrame(render);
     }
   });
   setInterval(() => {
     const el = $('pg-fast-stats');
-    const what = S.mode === 'overlay' ? 'Video ' + S.painted + ' FPS | detections ' + S.updates + '/s'
-                                      : 'Displayed ' + S.painted + ' FPS';
+    const what = OVERLAY_MODES[S.mode]
+      ? 'Video ' + S.painted + ' FPS | detections ' + S.updates + '/s' +
+        (S.mode === 'synced' ? ' | video delay ' + S.delay.toFixed(0) + ' ms' : ' | boxes predicted')
+      : 'Displayed ' + S.painted + ' FPS';
     if (el && S.running) el.textContent = what + ' | browser round trip p50 ' + median(S.rtts).toFixed(0) +
         ' / p95 ' + p95(S.rtts).toFixed(0) + ' ms | ' + S.maxInflight + ' in flight';
     window.__pgFast = {running: S.running, seq: S.seq, rttP50: median(S.rtts), mode: S.mode,
-                       painted: S.painted, updates: S.updates};  // automated checks
+                       painted: S.painted, updates: S.updates, delay: S.delay, buffered: S.frames.length};  // automated checks
     S.painted = 0; S.updates = 0;
   }, 1000);
 })();
@@ -348,7 +437,8 @@ FAST_STREAM_HTML = """
     <button id='pg-fast-stop' style='background:#334155;color:white;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;'>Stop</button>
     <label style='font-size:12px;color:#94a3b8;'>Display
       <select id='pg-fast-mode' style='background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;'>
-        <option value='overlay' selected>Smooth (live video + detections)</option>
+        <option value='synced' selected>Synced (smooth, boxes on target, video ~0.5 s behind)</option>
+        <option value='live'>Live (smooth, no delay, boxes predicted)</option>
         <option value='image'>Server images (exact, choppier)</option>
       </select></label>
     <label style='font-size:12px;color:#94a3b8;'>Frames in flight

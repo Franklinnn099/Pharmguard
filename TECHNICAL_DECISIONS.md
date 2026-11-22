@@ -475,3 +475,26 @@ measured on the local CPU server; tunnel adds more), so they trail a fast-moving
 paints at the display rate). Overlay drawing verified on the sample photo: 3 people, boxes, IDs, wrist and pocket markers,
 zone state. **Not yet measured over gradio.live on a GPU.**
 
+---
+
+## 16. Box Lag: Synced Display (2026-11-22, operator: "it's smooth now but the boxes lag behind me")
+
+**Cause.** In §15's smooth mode the live picture is current but each detection describes a frame captured one round trip
+earlier, so boxes trail a moving person by speed x lag.
+
+**Decision.** Display mode selector, default **Synced**:
+- **Synced (default):** the browser buffers its camera frames (ImageBitmaps, 2.5 s) and shows them delayed by
+  `capture->result lag + detection spacing + 30 ms` (smoothed, capped 2 s). Each displayed frame gets the detections
+  captured just before and after it, linearly interpolated per person id / hand side, so boxes sit on the person.
+  Cost: the whole picture is ~one round trip behind real time, like many CCTV systems.
+- **Live:** no video delay; boxes extrapolated from the two newest detections, prediction capped at 0.7 s. Better than no
+  correction, but overshoots when a person stops or turns.
+- **Server images:** unchanged.
+- Server overlay now includes each hand's `side` (needed to match hands between detections).
+
+**Measured (Chrome against local CPU server; fake camera sliding a real photo up to ~250 px/s; box centre compared with
+the person's true position in the displayed frame):** Synced median error **3.5 px** (p90 222 px), Live-predicted median
+**69 px**; uncorrected would be ~speed x lag (~100 px here). Small sample (9-11 frames per mode: the automation window was
+throttled to ~1 frame/s), so treat as indicative. The p90 includes moments when the box matched the wrong reference person.
+Not yet measured over gradio.live on a GPU.
+
