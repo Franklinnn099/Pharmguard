@@ -149,14 +149,21 @@ ALARM_HEAD = """
   ensureCtx();
   setInterval(() => {
     status();
+    // Source of truth: the fast stream's per-detection alarm state while it is fresh (arrives with every
+    // detection, ~one round trip after the event); otherwise the dashboard panel (0.5 s Gradio poll).
+    const fast = window.__pgAlarmFast;
     const el = document.getElementById('pg-alarm');
-    if (!el) return;
-    const sounding = el.dataset.sounding === '1';
-    const seq = parseInt(el.dataset.seq || '0', 10);
-    if (sounding && (seq !== lastSeq || !playing)) { start(el.dataset.kind || 'ALERT', parseFloat(el.dataset.volume || '0.25')); lastSeq = seq; }
+    let sounding, seq, kind, vol;
+    if (fast && performance.now() - fast.at < 1500) {
+      sounding = !!fast.sounding; seq = fast.seq; kind = fast.kind || 'ALERT'; vol = fast.volume;
+    } else if (el) {
+      sounding = el.dataset.sounding === '1'; seq = parseInt(el.dataset.seq || '0', 10);
+      kind = el.dataset.kind || 'ALERT'; vol = parseFloat(el.dataset.volume || '0.25');
+    } else { return; }
+    if (sounding && (seq !== lastSeq || !playing)) { start(kind, vol); lastSeq = seq; }
     else if (!sounding && playing) { stop(); }
     window.__pgAlarm = {playing, seq: lastSeq, ctxState: ctx ? ctx.state : 'unsupported'};  // automated checks
-  }, 250);
+  }, 100);
 })();
 </script>
 """

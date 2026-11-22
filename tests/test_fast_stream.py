@@ -194,3 +194,15 @@ def test_live_server_overlay_mode_returns_detections_as_json():
         assert o["alarm"] == "IDLE"
     finally:
         demo.close()
+
+
+def test_overlay_carries_alarm_sound_state_and_dashboard_uses_it():
+    from pharmaguard.ui import DASHBOARD_HEAD
+    pipeline = PharmaGuardPipeline(PharmaGuardConfig())
+    pipeline.process_frame(np.zeros((480, 640, 3), np.uint8))
+    assert pipeline.last_output.metadata["overlay"]["sound"]["sounding"] is False
+    assert pipeline.alarm.test("tester")
+    pipeline.process_frame(np.zeros((480, 640, 3), np.uint8))
+    snd = pipeline.last_output.metadata["overlay"]["sound"]
+    assert snd["sounding"] is True and snd["kind"] == "TEST" and snd["seq"] >= 1
+    assert "__pgAlarmFast" in DASHBOARD_HEAD

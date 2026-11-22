@@ -343,6 +343,8 @@ FAST_STREAM_HEAD = """
           const o = await res.json();
           if (seq > S.lastPainted) {
             S.lastPainted = seq; S.overlay = o; S.overlayAt = performance.now(); S.updates++;
+            // Siren state straight from the detection result (no wait for the dashboard's 0.5 s poll).
+            if (o.sound) window.__pgAlarmFast = Object.assign({at: performance.now()}, o.sound);
             S.dets.push({t: capturedAt, o});
             while (S.dets.length > 2 && capturedAt - S.dets[0].t > BUFFER_MS + 1000) S.dets.shift();
             // Auto delay = median capture->result lag of the last 15 detections, smoothed so the video does

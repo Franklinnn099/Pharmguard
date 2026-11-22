@@ -45,6 +45,14 @@ class DetectorConfig(BaseModel):
                     "Display/new-track confidence is governed by the tracker thresholds."
     )
     iou_threshold: float = Field(default=0.45, ge=0.1, le=1.0)
+    dedupe_poses: bool = Field(
+        default=True,
+        description="Drop a pose detection whose skeleton coincides with another's (same keypoints within "
+                    "dedupe_kp_dist of box height on >= dedupe_min_shared joints): one body reported twice, e.g. "
+                    "an upper-body box inside a full-body box close to the webcam. Two real people overlapping "
+                    "have different skeletons and are kept.")
+    dedupe_kp_dist: float = Field(default=0.08, gt=0.0, le=1.0)
+    dedupe_min_shared: int = Field(default=3, ge=1, le=17)
     target_classes: List[int] = Field(
         default_factory=lambda: [0],
         description="Class 0 in COCO corresponds to 'person'."

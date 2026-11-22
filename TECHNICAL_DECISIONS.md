@@ -539,3 +539,22 @@ Reported right after §17. Two changes in §17 could explain it; both are addres
   worst 75 px (was 6.2 / 75).
 - **Upload default 640 px again (JPEG 0.7), 480/320 remain selectable.** Sample photo, pose model at imgsz 640: wrist confidence
   mean 0.63 (640 q70) vs 0.59 (480 q60); a small effect on this photo, but detection was known to work at 640.
+
+---
+
+## 19. Alarm Sound Latency + Duplicate Person Suppression (2026-11-22, operator: "the sound lags and it seems to be tracking 2 people when there's only one")
+
+**Sound lag.** The siren followed the dashboard's alarm panel, refreshed by a 0.5 s Gradio timer whose every tick needs several
+round trips over `gradio.live`, on top of the detection lag. Now the overlay JSON of every fast-stream detection carries
+`sound: {sounding, seq, kind, volume}`; the page's siren script uses it while fresh (< 1.5 s old) and polls every 100 ms
+(was 250 ms), falling back to the panel otherwise (camera stopped, Gradio fallback stream). The siren is not subject to the
+display delay of §16-17: it plays when the result arrives. Tested: overlay carries TEST/ALERT sound state; page scripts parse.
+
+**Two people for one.** Close to a webcam the pose model can return two boxes for one body (e.g. upper body inside full body)
+that overlap too little for its NMS (IoU 0.45). Boxes cannot distinguish this from two people overlapping; skeletons can.
+`detector.suppress_duplicate_poses` (on by default, `detector.dedupe_poses`): two detections sharing >= 3 confidently visible
+keypoints with median distance < 0.08 x box height are one person; the one with more visible keypoints (then higher
+confidence) is kept, so the full skeleton with hips survives. Tests: same body twice -> 1 (full-body kept); two people one
+partly behind the other (boxes overlapping ~60%, skeletons 50 px apart) -> 2; sample photo unchanged (3 people either way).
+**Not verified on the operator's footage**; a dashed "(occluded)" second box would instead be a lost-track ghost (shown up
+to `tracker.lost_track_seconds` = 2 s) and is not changed here.

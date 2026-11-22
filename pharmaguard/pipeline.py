@@ -331,6 +331,8 @@ class PharmaGuardPipeline:
             "bags": [[nx(b[0]), ny(b[1]), nx(b[2]), ny(b[3])] for b in self.bag_boxes],
             "persons": persons,
             "alarm": alarm.state,
+            "sound": {"sounding": bool(alarm.sounding), "seq": int(alarm.sound_seq), "kind": alarm.kind,
+                      "volume": float(self.config.alarm.volume)},
             "alerts": len(self.alert_manager.alert_history),
             "aspect": round(w / h, 4),
         }

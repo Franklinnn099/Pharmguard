@@ -40,6 +40,40 @@ class DetectionResult:
         )
 
 
+def suppress_duplicate_poses(result: "DetectionResult", kp_conf: float = 0.3, dist_frac: float = 0.08,
+                             min_shared: int = 3) -> "DetectionResult":
+    """Remove detections that are the same body as another detection.
+
+    Two detections are the same person when at least ``min_shared`` keypoints are confidently visible in both
+    and their median distance is below ``dist_frac`` x the taller box's height. Of each duplicate pair the one
+    with more visible keypoints is kept (ties: higher confidence), so the fuller skeleton (hips for the pocket
+    check) survives. Boxes alone cannot tell this apart from two people overlapping; skeletons can.
+    """
+    if result.keypoints is None or result.count < 2:
+        return result
+    kps = result.keypoints
+    visible = kps[:, :, 2] >= kp_conf
+    n_vis = visible.sum(axis=1)
+    order = sorted(range(result.count), key=lambda i: (-int(n_vis[i]), -float(result.confidence[i])))
+    keep: List[int] = []
+    for i in order:
+        dup = False
+        for j in keep:
+            shared = visible[i] & visible[j]
+            if int(shared.sum()) < min_shared:
+                continue
+            d = np.linalg.norm(kps[i, shared, :2] - kps[j, shared, :2], axis=1)
+            h = max(result.xyxy[i, 3] - result.xyxy[i, 1], result.xyxy[j, 3] - result.xyxy[j, 1], 1.0)
+            if float(np.median(d)) < dist_frac * h:
+                dup = True
+                break
+        if not dup:
+            keep.append(i)
+    if len(keep) == result.count:
+        return result
+    return result.subset(np.array(sorted(keep), dtype=np.int64))
+
+
 # COCO-17 keypoint indices used by the behaviour engine.
 KP_L_SHOULDER, KP_R_SHOULDER = 5, 6
 KP_L_WRIST, KP_R_WRIST = 9, 10
@@ -152,13 +186,17 @@ class YOLODetector(BaseDetector):
             if keypoints.shape[-1] == 2:  # some exports omit confidence
                 keypoints = np.concatenate([keypoints, np.ones(keypoints.shape[:-1] + (1,), np.float32)], -1)
 
-        return DetectionResult(
+        out = DetectionResult(
             xyxy=xyxy,
             confidence=confidence,
             class_id=class_id,
             class_name=class_name,
             keypoints=keypoints,
         )
+        if self.config.dedupe_poses:
+            out = suppress_duplicate_poses(out, dist_frac=self.config.dedupe_kp_dist,
+                                           min_shared=self.config.dedupe_min_shared)
+        return out
 
     def get_model_info(self) -> Dict[str, Any]:
         """Return model metadata."""
