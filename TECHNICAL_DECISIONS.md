@@ -451,3 +451,27 @@ at >= 0.35. A hand going INTO a pocket is partly hidden, so the wrist confidence
 0.2-confidence wrist in the pocket (alarm) and missing hips (pocket off). On the sample photo the new settings flag no hand as
 "at pocket" that the old ones did not (one relaxed hand was already flagged: P3-2). **Not yet checked on live pocketing footage.**
 
+---
+
+## 15. Smooth Display: Live Video + Detection Overlay (2026-11-22, operator: "it triggered but the video is still choppy")
+
+**Problem.** Even with frames pipelined (§12), the operator sees a new picture only when an annotated frame comes back,
+so the display rate equals the detection rate (CPU ~5-7/s; tunnel round trips add jitter).
+
+**Decision.** The fast stream gains a display mode (`X-PG-Mode: overlay`, default in the UI selector "Smooth"):
+- The browser paints its **own camera frames at full rate** (requestAnimationFrame, only when the video has a new frame)
+  and draws the latest detections on top: zones + state, bags, person boxes / IDs / score / level, wrist dots (hollow =
+  low-confidence wrist), pocket circles, "hips not visible", alarm border, HUD.
+- The server returns `PipelineOutput.metadata["overlay"]` as JSON: normalized [0, 1] coordinates, same colours as
+  `annotator.py`. Measured on the sample photo: < 20 KB per response (an annotated JPEG is ~40-80 KB).
+- The server still annotates every frame (evidence clips and the Gradio fallback need it).
+- "Server images" mode keeps the exact §12 behaviour.
+
+**Trade-off (state it if asked):** in smooth mode the boxes and dots lag the live picture by about one round trip (~0.4 s
+measured on the local CPU server; tunnel adds more), so they trail a fast-moving person. Detection and alarms are unchanged.
+
+**Measured (local server, CPU, Chrome automation window, synthetic camera):** detections 5-7/s, video painted 8-12 FPS
+(the automation window itself only ran requestAnimationFrame at ~7.5-12/s, so this is a lower bound; a foreground window
+paints at the display rate). Overlay drawing verified on the sample photo: 3 people, boxes, IDs, wrist and pocket markers,
+zone state. **Not yet measured over gradio.live on a GPU.**
+

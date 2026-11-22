@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14)
+**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 146 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
+**Test suite**: 148 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -18,6 +18,7 @@
 | Person detection on real imagery | Sample photo: ≥2 people detected and tracked (`test_pipeline_on_real_people_image_downscaled`) |
 | Server-side downscale of HD frames to 640 wide | Unit tests (RGB/RGBA/grey 1280x720 → 640x360) |
 | End-to-end FPS/latency telemetry and NO SIGNAL detection | Deterministic fake-clock tests; displayed on dashboard |
+| Smooth display: live browser video + detection overlay JSON (`X-PG-Mode: overlay`) | `tests/test_fast_stream.py` (real server, JSON < 20 KB, normalized coords); real Chrome: overlay drawn for 3 people on the sample photo |
 | Fast stream (`POST /pg/frame`, several frames in flight, login enforced, in-order processing) | `tests/test_fast_stream.py` (incl. real server + YOLO); real Chrome against local server with a synthetic camera feed: 6 FPS on CPU |
 | JPEG return + 640x480 capture request served to browser | `test_ui_transport_configuration` inspects the served Gradio config |
 | Tests no longer write to `logs/pharmaguard_alerts.jsonl` | Byte-compared before/after a full test run |

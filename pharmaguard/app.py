@@ -172,7 +172,7 @@ def main():
 
     # Fast stream: one POST per frame, several in flight (pharmaguard/fast_stream.py).
     service = FastFrameService(
-        process_rgb=lambda rgb: pipeline.process_frame(rgb).annotated_frame_rgb,
+        process_rgb=pipeline.process_frame,
         jpeg_quality=config.stream.fast_jpeg_quality,
         on_client_rtt=pipeline.telemetry.record_client_rtt,
     )

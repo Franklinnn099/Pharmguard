@@ -155,3 +155,42 @@ def test_live_server_fast_stream_requires_login_and_returns_annotated_frame():
         assert pipeline.telemetry_snapshot().client_rtt_p50_ms == pytest.approx(150.0)
     finally:
         demo.close()
+
+
+def test_overlay_mode_falls_back_to_jpeg_without_overlay_data():
+    svc = _identity_service([])
+    res = svc.handle(_jpeg(5), seq=0, mode="overlay")
+    assert res.status == 200 and res.media_type == "image/jpeg"
+
+
+def test_live_server_overlay_mode_returns_detections_as_json():
+    """Smooth display mode: the server returns drawing data (normalized), not an image."""
+    import json
+    import ultralytics
+    from pharmaguard.ui import create_pharmaguard_ui
+
+    bus = cv2.imread(os.path.join(os.path.dirname(ultralytics.__file__), "assets", "bus.jpg"))
+    frame = cv2.imencode(".jpg", cv2.resize(bus, (640, 480)))[1].tobytes()
+    pipeline = PharmaGuardPipeline(PharmaGuardConfig())
+    demo = create_pharmaguard_ui(pipeline)
+    demo.queue()
+    port = _free_port()
+    try:
+        demo.launch(server_name="127.0.0.1", server_port=port, prevent_thread_lock=True, quiet=True)
+        install_fast_stream_route(demo.server_app, FastFrameService(pipeline.process_frame), require_login=False)
+        with httpx.Client(timeout=60) as c:
+            for seq in range(3):
+                r = c.post(f"http://127.0.0.1:{port}{FRAME_PATH}", content=frame,
+                           headers={"X-PG-Seq": str(seq), "X-PG-Mode": "overlay", "X-PG-Session": "s"})
+                assert r.status_code == 200 and r.headers["content-type"].startswith("application/json")
+        o = json.loads(r.content)
+        assert len(r.content) < 20000                       # vs ~40-80 KB for an annotated JPEG
+        people = [p for p in o["persons"] if not p["occluded"]]
+        assert len(people) >= 2
+        for p in people:
+            assert all(0.0 <= v <= 1.0 for v in p["box"])
+            assert all(h["state"] in ("free", "shelf", "pocket") for h in p["hands"])
+        assert o["zones"] and o["zones"][0]["state"] in ("CONTACT", "PRESENCE", "IDLE")
+        assert o["alarm"] == "IDLE"
+    finally:
+        demo.close()

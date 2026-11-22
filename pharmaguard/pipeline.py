@@ -274,7 +274,8 @@ class PharmaGuardPipeline:
             "new_alerts": new_alerts,
             "behavior_events": behavior_events,
             "zone_activity": zone_activity,
-            "frame_counter": self.frame_counter
+            "frame_counter": self.frame_counter,
+            "overlay": self._overlay_payload(tracking_result, zone_activity, w, h),
         }
 
         output = PipelineOutput(
@@ -290,6 +291,48 @@ class PharmaGuardPipeline:
         )
         self.last_output = output
         return output
+
+    def _overlay_payload(self, tracking_result, zone_activity: Dict[str, Any], w: int, h: int) -> Dict[str, Any]:
+        """What the annotator draws, as plain data in normalized [0, 1] coordinates. The fast stream's
+        smooth mode draws this over the browser's live video instead of downloading annotated frames."""
+        def nx(v: float) -> float:
+            return round(float(v) / w, 4)
+
+        def ny(v: float) -> float:
+            return round(float(v) / h, 4)
+
+        persons = []
+        for tid, person in tracking_result.tracked_persons.items():
+            x1, y1, x2, y2 = [float(v) for v in person.current_box]
+            entry: Dict[str, Any] = {"id": int(tid), "box": [nx(x1), ny(y1), nx(x2), ny(y2)],
+                                     "occluded": person.frames_lost > 0, "in_shelf": bool(person.in_shelf_zone)}
+            view = self.behavior_analyzer.person_view(tid)
+            if view is not None and person.frames_lost == 0:
+                entry["level"], entry["score"] = int(view.level), float(view.score)
+                hands = []
+                for hand in view.hands:
+                    pt = hand.point or hand.reach_point
+                    if pt is None:
+                        continue
+                    state = "pocket" if (hand.in_pocket or hand.in_bag) else ("shelf" if hand.shelf_zone else "free")
+                    hands.append({"x": nx(pt[0]), "y": ny(pt[1]), "state": state, "weak": hand.point is None})
+                entry["hands"] = hands
+                obs = view.observation
+                if obs is not None and obs.has_pose:
+                    entry["hips_visible"] = bool(obs.hips_visible)
+                    entry["pockets"] = [{"x": nx(c[0]), "y": ny(c[1]), "r": nx(obs.pocket_radius)}
+                                        for c in obs.pocket_centers]
+            persons.append(entry)
+        alarm = self.alarm.snapshot()
+        return {
+            "zones": [{"name": z.name, "polygon": z.polygon_normalized,
+                       "state": zone_activity.get(z.name, "IDLE")} for z in self.config.zones],
+            "bags": [[nx(b[0]), ny(b[1]), nx(b[2]), ny(b[3])] for b in self.bag_boxes],
+            "persons": persons,
+            "alarm": alarm.state,
+            "alerts": len(self.alert_manager.alert_history),
+            "aspect": round(w / h, 4),
+        }
 
     # ------------------------------------------------------------------ event recording
     def _record_alerts(self, alerts: List[SecurityAlert], ts: float) -> None:
