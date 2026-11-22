@@ -41,6 +41,7 @@ class BehaviorEventType(str, Enum):
     PROLONGED_PRESENCE = "PROLONGED_PRESENCE"
     REPEATED_CONTACTS = "REPEATED_CONTACTS"
     LEFT_AFTER_CONCEALMENT = "LEFT_AFTER_CONCEALMENT"
+    ITEM_NOT_RETURNED = "ITEM_NOT_RETURNED"        # hand went shelf -> pocket/bag and did not go back to the shelf
     SUSPICION_REVIEW = "SUSPICION_REVIEW"          # WARNING: staff should review
     SUSPICION_ALERT = "SUSPICION_ALERT"            # ALERT: alarm
     INCIDENT_CLOSED = "INCIDENT_CLOSED"
@@ -100,6 +101,9 @@ class PersonState:
     near_since: Dict[str, float] = field(default_factory=dict)
     presence_awarded_at: Dict[str, float] = field(default_factory=dict)
     last_concealment_t: Optional[float] = None
+    # Concealments awaiting confirmation: (side, target, zone, t). Confirmed if that hand does not
+    # return to the shelf within keep_confirm_sec (or the person leaves view first).
+    pending_keep: List[Tuple[str, str, str, float]] = field(default_factory=list)
     last_concealment_zone: str = ""
     exit_awarded: bool = True
     away_since: Optional[float] = None
@@ -211,6 +215,7 @@ class PharmacyBehaviorAnalyzer:
                     hs.pocket_since = hs.bag_since = None
                     hs.candidate_zone = hs.candidate_since = None
                 self._check_away(st, tid, now, near=False, events=events)
+                self._check_kept(st, tid, now, events)
                 self._update_level(st, tid, now, events)
                 continue
 
@@ -231,6 +236,7 @@ class PharmacyBehaviorAnalyzer:
 
             self._update_presence(st, tid, obs, zones_by_name, now, events)
             self._check_away(st, tid, now, near=bool(obs.near_zones), events=events)
+            self._check_kept(st, tid, now, events)
             self._update_level(st, tid, now, events)
             person.in_shelf_zone = any(h.contact_zone for h in st.hands.values())
 
@@ -240,6 +246,7 @@ class PharmacyBehaviorAnalyzer:
             if st is None:
                 continue
             self._award_exit(st, tid, now, "left the camera view", events)
+            self._check_kept(st, tid, now, events, force=True)   # left with the item before the window ended
             self._update_level(st, tid, now, events)
             del self.people[tid]
 
@@ -320,9 +327,17 @@ class PharmacyBehaviorAnalyzer:
     def _on_contact(self, st: PersonState, tid: int, side: str, zone: str, now: float,
                     events: List[BehaviorEvent]) -> None:
         cfg = self.config
+        # Same hand back at the shelf before the keep window ended: the item was put back.
+        returned = [p for p in st.pending_keep if p[0] == side]
+        if returned:
+            st.pending_keep = [p for p in st.pending_keep if p[0] != side]
         # Same hand back at the shelf soon after a pocket-like movement: item examined and put back.
-        cancelled = [e for e in st.evidence if e.kind == "pocket" and e.side == side
+        cancelled = [e for e in st.evidence if e.kind in ("pocket", "kept_pocket") and e.side == side
                      and now - e.t <= cfg.return_cancels_pocket_sec]
+        if returned and not cancelled:
+            events.append(BehaviorEvent(BehaviorEventType.RETURNED_TO_SHELF, tid, zone, now,
+                                        description=f"Person #{tid} {side} hand returned to {zone} "
+                                                    f"within {cfg.keep_confirm_sec:.0f}s: item treated as put back."))
         if cancelled:
             st.evidence = [e for e in st.evidence
                            if e not in cancelled and not (e.kind == "exit" and e.t >= cancelled[0].t)]
@@ -359,10 +374,28 @@ class PharmacyBehaviorAnalyzer:
         reason = f"{side} hand moved from {zone} to {what} {gap:.1f}s after shelf contact"
         self._add(st, now, target, weight, False, reason, zone, side)
         st.last_concealment_t, st.last_concealment_zone = now, zone
+        st.pending_keep = [p for p in st.pending_keep if p[0] != side] + [(side, target, zone, now)]
         st.exit_awarded = False
         st.away_since = None
         events.append(BehaviorEvent(etype, tid, zone, now, description=f"Person #{tid}: {reason}.",
                                     score=self.score(tid, now)))
+
+    def _check_kept(self, st: PersonState, tid: int, now: float, events: List[BehaviorEvent],
+                    force: bool = False) -> None:
+        """Shelf -> pocket/bag, and the hand did not go back to the shelf within keep_confirm_sec:
+        the item was kept. ``force`` confirms immediately (the person left view inside the window)."""
+        cfg = self.config
+        still = []
+        for side, target, zone, t in st.pending_keep:
+            if not force and now - t < cfg.keep_confirm_sec:
+                still.append((side, target, zone, t))
+                continue
+            how = "left view with it" if force and now - t < cfg.keep_confirm_sec else                 f"not returned within {cfg.keep_confirm_sec:.0f}s"
+            reason = f"item taken from {zone} to {'a bag' if target == 'bag' else 'pocket'}, {how}"
+            self._add(st, now, f"kept_{target}", cfg.w_item_kept, False, reason, zone, side)
+            events.append(BehaviorEvent(BehaviorEventType.ITEM_NOT_RETURNED, tid, zone, now,
+                                        description=f"Person #{tid}: {reason}.", score=self.score(tid, now)))
+        st.pending_keep = still
 
     # ------------------------------------------------------------------ presence / exit
     def _update_presence(self, st: PersonState, tid: int, obs: PersonObservation,

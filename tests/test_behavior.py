@@ -112,19 +112,45 @@ def test_s7_shelf_to_bag_then_leave_escalates_review_then_exactly_one_alert():
     assert len(alerts) == 1
     a = alerts[0]
     assert a.severity == "ALERT" and a.score >= CFG.alert_threshold
-    assert any("bag" in r for r in a.reasons) and any("after concealment" in r for r in a.reasons)
-    # Escalation within ONE incident: visual REVIEW at the transfer, ALERT when the person leaves.
+    assert any("bag" in r for r in a.reasons)
+    assert any("not returned" in r or "left view" in r or "after concealment" in r for r in a.reasons)
+    # Escalation within ONE incident: visual REVIEW at the transfer, ALERT once the item is kept.
     assert run.severities() == ["WARNING", "ALERT"]
     review = run.of(E.SUSPICION_REVIEW)[0]
     assert review.incident_id == a.incident_id and review.timestamp < a.timestamp
 
 
-def test_s7b_shelf_to_pocket_then_leave_is_review_only():
+def test_s7b_shelf_to_pocket_then_leave_raises_one_alert():
     script = [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None), (1.5, "pocket_R", None),
               (1.0, "rest", None), (3.0, "rest", 750)]
     run = run_actors([Actor(1, 320, script)])
-    assert run.severities() == ["WARNING"]
-    assert len(run.of(E.SUSPICION_REVIEW)) == 1 and run.of(E.SUSPICION_ALERT) == []
+    assert len(run.of(E.SUSPICION_ALERT)) == 1
+    assert len(run.of(E.ITEM_NOT_RETURNED)) == 1
+
+
+@pytest.mark.parametrize("target,bag", [("pocket_R", False), ("bag_R", True)])
+def test_shelf_to_pocket_or_bag_and_staying_put_raises_alarm(target, bag):
+    """Realistic trigger: take an item and put it away; no need to walk off. Alarm after keep_confirm_sec."""
+    script = [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None), (1.2, target, None),
+              (8.0, "rest", None)]
+    run = run_actors([Actor(1, 320, script, bag=bag, leave_at_end=False)])
+    alerts = run.of(E.SUSPICION_ALERT)
+    assert len(alerts) == 1, run.severities()
+    assert run.of(E.LEFT_AFTER_CONCEALMENT) == []
+    kept = run.of(E.ITEM_NOT_RETURNED)[0]
+    conceal = (run.of(E.HAND_TO_POCKET) + run.of(E.HAND_TO_BAG))[0]
+    assert kept.timestamp - conceal.timestamp == pytest.approx(CFG.keep_confirm_sec, abs=0.2)
+    assert alerts[0].timestamp >= kept.timestamp
+
+
+@pytest.mark.parametrize("target,bag", [("pocket_R", False), ("bag_R", True)])
+def test_item_put_back_within_keep_window_raises_no_alarm(target, bag):
+    script = [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None), (1.0, target, None),
+              (1.5, "reach_R", None), (8.0, "rest", None)]
+    run = run_actors([Actor(1, 320, script, bag=bag, leave_at_end=False)])
+    assert run.of(E.SUSPICION_ALERT) == []
+    assert run.of(E.ITEM_NOT_RETURNED) == []
+    assert run.of(E.RETURNED_TO_SHELF)
 
 
 def test_slow_transfer_outside_carry_window_is_not_concealment():

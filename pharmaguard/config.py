@@ -155,6 +155,12 @@ class BehaviorConfig(BaseModel):
     w_hand_to_pocket: float = 0.45
     w_hand_to_bag: float = 0.70
     w_exit_after_concealment: float = 0.30
+    keep_confirm_sec: float = Field(default=4.0, gt=0.0,
+        description="After shelf -> pocket/bag, if that hand does not touch the shelf again within this time "
+                    "(or the person leaves view), the item counts as kept and w_item_kept is added.")
+    w_item_kept: float = Field(default=0.55,
+        description="Weight for 'item not returned'. contact + pocket + kept ~1.05 and contact + bag + kept ~1.3 (after decay) "
+                    "both reach the ALERT threshold without the person having to walk away.")
     browsing_cap: float = Field(default=0.35,
         description="Maximum score obtainable from browsing signals alone (contacts, repeats, presence). "
                     "Kept below review_threshold so ordinary browsing can never raise a review/alert.")

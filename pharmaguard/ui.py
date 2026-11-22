@@ -476,7 +476,7 @@ def create_pharmaguard_ui(
                             )
                             dwell_slider = gr.Slider(
                                 minimum=0.6, maximum=2.0, value=cfg.behavior.alert_threshold, step=0.05,
-                                label="Alert threshold (suspicion score; shelf->bag->exit ~1.1, shelf->pocket->exit ~0.85)"
+                                label="Alert threshold (suspicion score; shelf->pocket kept 4 s ~1.05, shelf->bag kept 4 s ~1.3)"
                             )
                             apply_btn = gr.Button("Apply Settings", size="sm")
                             cfg_status = gr.Textbox(label="Config Status", interactive=False, max_lines=1)

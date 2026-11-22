@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport added, TECHNICAL_DECISIONS §12)
+**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 139 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
+**Test suite**: 143 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -84,6 +84,7 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 | Ref | Defect | Planned |
 |---|---|---|
 | P3-1 | **False-alert / miss rates on real staged footage are unmeasured.** Logic is verified only on scripted skeletons | Owner records the scenarios in docs/DEMO_STAGING.md |
+| P3-4 | Since §13, an item held at hip height > 4 s without being put back raises an ALERT (was REVIEW). Trade-off for a realistic pocket/bag trigger | Check in staged scenario 5 |
 | P3-2 | A relaxed hand at the hip registers as "pocket" on real imagery (harmless unless within 3 s after a shelf contact by the same hand); `pocket_radius_torso` uncalibrated | Calibrate on staged clips |
 | P3-3 | CPU only: pose + bag detection caps compute at ~6.9 FPS (11.6 FPS without bags). GPU unmeasured | Colab run |
 | R8 | One pipeline is shared by all sessions; two simultaneous streams corrupt tracker state | Before demo: single-operator lock |

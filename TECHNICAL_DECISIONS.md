@@ -408,3 +408,26 @@ Gradio stream path on the same machine, localhost: 185 ms p50, 5.2 FPS. Real Chr
 feed, 3 in flight, CPU): 6 FPS displayed, browser round trip p50 508 ms (CPU queueing). **Not yet measured over `gradio.live`
 on a Colab GPU**; the share tunnel could not be created from the dev machine.
 
+---
+
+## 13. "Item Not Returned" Trigger (2026-11-22, operator request: taking an item into a pocket/bag should alarm)
+
+**Before:** shelf -> pocket scored 0.55 (nothing) and shelf -> pocket -> walk away 0.85 (REVIEW only). Only the bag path, or
+pocketing after several browsing contacts, reached the ALERT at 1.00. Testing in a room, the operator picked up an item,
+pocketed it and got nothing.
+
+**Rule added (`behavior.py::_check_kept`):** after a shelf -> pocket/bag transfer, if the same hand does not touch the shelf
+again within `keep_confirm_sec` (4.0 s), add `w_item_kept` (0.55, concealment evidence). If the person leaves view inside the
+window, it is confirmed immediately. Touching the shelf again with that hand inside the window cancels it (item put back,
+RETURNED_TO_SHELF event). New event type `ITEM_NOT_RETURNED`.
+
+**Resulting outcomes (scripted skeleton tests, `tests/test_behavior.py`):**
+- shelf -> pocket, stay or leave: **ALERT** 4 s after pocketing (score ~1.05; 0.50 gave 0.997 after decay, hence 0.55).
+- shelf -> bag: REVIEW at the transfer (0.80), **ALERT** 4 s later (~1.3).
+- pocket or bag, then back to the shelf within 4 s: no ALERT. Browsing, walking past, own-bag reach: unchanged (nothing).
+- Examine at the hip for 2 s and put back (S5): still nothing.
+
+**Trade-off (accepted for the demo, must be stated):** a person holding an item at hip height for more than 4 s without
+putting it back, or carrying it at the hip towards a till, now raises an ALERT instead of a REVIEW. Real-footage false-alarm
+rate remains unmeasured (P3-1). Weights and the window are configurable (`behavior.keep_confirm_sec`, `behavior.w_item_kept`).
+
