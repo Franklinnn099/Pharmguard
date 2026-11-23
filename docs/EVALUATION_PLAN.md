@@ -15,7 +15,10 @@ Download on your own laptop (these sites need a browser login or click-through; 
 | Shoplifting Dataset, Muneer & Saddique, Mendeley Data, DOI 10.17632/3pn2rnv2wg.1 | ~900 staged clips (450 / 450), single camera angle | Larger test set |
 | UCF-Crime (shoplifting + normal classes) | Real, low-resolution overhead CCTV | Hard set only: wrists and hips are often not visible, so expect misses. Report separately |
 
-Steps:
+**Easiest: run `colab/PharmaGuard_Evaluate.ipynb` in Colab.** It keeps the zip and results in Google Drive
+(`MyDrive/PharmaGuard/`), helps you place the zone on a sample frame, and runs the steps below.
+
+Steps (local alternative):
 1. Unzip into `clips/<dataset>/` keeping the class folders.
 2. Open one clip, take a screenshot, and draw the shelf zone in the **Zones** tab from that screenshot (or edit
    `configs/demo_shelf.yaml` coordinates). Save it as e.g. `configs/mnnit_view.yaml`. **Every camera view needs its own

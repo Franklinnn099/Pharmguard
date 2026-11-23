@@ -61,6 +61,7 @@ pharmguard/
 │
 ├── colab/                          # Google Colab execution artifacts
 │   ├── PharmaGuard_Colab.ipynb     # Turnkey Colab notebook with live tunnel (no Drive mount yet)
+│   ├── PharmaGuard_Evaluate.ipynb  # Dataset zip in Drive -> zone check -> score clips -> results to Drive
 │   └── setup_colab.sh              # Shell script for automated Colab environment bootstrap
 │
 └── tests/                          # Automated test suite
