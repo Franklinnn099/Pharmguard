@@ -44,3 +44,25 @@ def test_load_labels(tmp_path):
     p.write_text("clip,scenario,expected\nc.mp4,x,maybe\n")
     with pytest.raises(ValueError):
         load_labels(str(p))
+
+
+def test_per_clip_config_column(tmp_path):
+    p = tmp_path / "labels.csv"
+    p.write_text("clip,scenario,expected,notes,config\na.mp4,s,none,,view.yaml\nb.mp4,s,alert,,\n")
+    a, b = load_labels(str(p))
+    assert a.config == str(tmp_path / "view.yaml") and b.config == ""
+
+
+def test_make_labels_tool(tmp_path):
+    import subprocess, sys, os
+    for folder, n in (("Shoplifting", 2), ("Normal", 3), ("other", 1)):
+        d = tmp_path / folder / "sub"
+        d.mkdir(parents=True)
+        for i in range(n):
+            (d / f"v{i}.mp4").write_bytes(b"")
+    tool = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", "make_labels.py")
+    out = subprocess.run([sys.executable, tool, str(tmp_path), "--map", "shoplifting=alert", "normal=none"],
+                         capture_output=True, text=True, check=True).stdout
+    assert "Skipped folders" in out and "other" in out
+    labels = load_labels(str(tmp_path / "labels.csv"))
+    assert sorted(l.expected for l in labels) == ["alert", "alert", "none", "none", "none"]

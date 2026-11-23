@@ -3,7 +3,8 @@ Score PharmaGuard on a folder of labelled clips (docs/EVALUATION_PLAN.md).
 
     python tools/evaluate_clips.py clips/labels.csv --config configs/demo_shelf.yaml --fps 5 --out results.csv
 
-labels.csv columns: clip,scenario,expected[,notes]   expected = none | review | alert
+labels.csv columns: clip,scenario,expected[,notes][,config]   expected = none | review | alert
+A per-clip `config` overrides --config (each camera view needs its own shelf zone).
 Prints per-clip outcomes and the summary metrics for the report; writes per-clip rows to --out.
 Every figure printed is measured on the clips given; nothing is estimated.
 """
@@ -35,8 +36,12 @@ def main() -> None:
     labels = load_labels(args.labels)
     config = PharmaGuardConfig.load_from_yaml(args.config) if args.config else PharmaGuardConfig()
     results = []
+    per_view: dict = {}
     for i, lab in enumerate(labels, 1):
-        r = run_clip(lab, config, args.fps)
+        cfg = config
+        if lab.config:
+            cfg = per_view.setdefault(lab.config, PharmaGuardConfig.load_from_yaml(lab.config))
+        r = run_clip(lab, cfg, args.fps)
         results.append(r)
         mark = "ERROR" if r.error else ("ok" if r.correct else "WRONG")
         print(f"[{i:>3}/{len(labels)}] {mark:<5} {r.clip:<28} {r.scenario:<22} expected {r.expected:<6} "

@@ -3,7 +3,7 @@
 **Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control §17; prediction jitter fix §18; siren via fast stream + duplicate-pose suppression §19; bent-elbow pocket rule + faster alarm §20); 2026-11-23: inventory + reconciliation §21, clip evaluation tool §22
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 165 passed (`python -m pytest tests/ -q`, Linux, CPU, Python 3.13, torch 2.15, 2026-11-23)
+**Test suite**: 167 passed (`python -m pytest tests/ -q`, Linux, CPU, Python 3.13, torch 2.15, 2026-11-23)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.

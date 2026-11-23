@@ -5,6 +5,28 @@ No pharmacy is needed. Every clip is recorded at a mock shelf with consenting ac
 Camera placement, zone drawing and the 10 functional scenarios are in `docs/DEMO_STAGING.md`. This plan
 adds a repeatable, scored test set for the report.
 
+## 0. Option without filming: public staged datasets
+
+Download on your own laptop (these sites need a browser login or click-through; cite them in the report):
+
+| Dataset | What it is | Use it as |
+|---|---|---|
+| Shoplifting Dataset (2022), CV Lab MNNIT Allahabad, Mendeley Data, DOI 10.17632/r3yjf35hzr.1 | Staged in a lab, 640x480, 30 FPS, classes `normal` / `shoplifting` (items into bags or under clothing) | Closest to the mock-shelf demo. **Start here** |
+| Shoplifting Dataset, Muneer & Saddique, Mendeley Data, DOI 10.17632/3pn2rnv2wg.1 | ~900 staged clips (450 / 450), single camera angle | Larger test set |
+| UCF-Crime (shoplifting + normal classes) | Real, low-resolution overhead CCTV | Hard set only: wrists and hips are often not visible, so expect misses. Report separately |
+
+Steps:
+1. Unzip into `clips/<dataset>/` keeping the class folders.
+2. Open one clip, take a screenshot, and draw the shelf zone in the **Zones** tab from that screenshot (or edit
+   `configs/demo_shelf.yaml` coordinates). Save it as e.g. `configs/mnnit_view.yaml`. **Every camera view needs its own
+   zone**; without the right zone no shelf contact is ever seen and every clip scores `none`. If a dataset has several
+   camera angles, make one config per angle and split the clips by angle.
+3. `python tools/make_labels.py clips/mnnit --map shoplifting=alert normal=none --config ../../configs/mnnit_view.yaml`
+4. `python tools/evaluate_clips.py clips/mnnit/labels.csv --fps 5 --out results_mnnit.csv`
+
+Be honest about the gap: these clips are not a pharmacy and not your camera placement. Report them as
+"public staged retail datasets" and keep the mock-shelf set (below) for the pharmacy-specific claim if you can film it.
+
 ## 1. Setup (one afternoon)
 
 | Item | Requirement |

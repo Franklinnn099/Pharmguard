@@ -32,6 +32,7 @@ pharmguard/
 ├── configs/demo_shelf.yaml         # Demo zones/thresholds (pass with --config)
 ├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
 ├── tools/evaluate_clips.py         # Score labelled clips: recall, precision, false-alarm rate
+├── tools/make_labels.py            # labels.csv from a dataset's class folders
 ├── tools/track_video.py            # Run pipeline on recorded video (video time); tracking report + annotated MP4
 │
 ├── pharmaguard/                    # Core Python package

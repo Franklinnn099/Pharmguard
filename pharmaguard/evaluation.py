@@ -28,6 +28,7 @@ class ClipLabel:
     scenario: str
     expected: str
     notes: str = ""
+    config: str = ""                   # optional per-clip YAML (zones drawn for that camera view)
 
 
 @dataclass
@@ -53,7 +54,9 @@ class ClipResult:
 
 
 def load_labels(path: str) -> List[ClipLabel]:
-    """CSV with header ``clip,scenario,expected[,notes]``. Clip paths are relative to the CSV's folder."""
+    """CSV with header ``clip,scenario,expected[,notes][,config]``. Paths are relative to the CSV's folder.
+
+    ``config`` lets clips from different datasets / camera views use their own shelf zones."""
     base = os.path.dirname(os.path.abspath(path))
     out = []
     with open(path, newline="", encoding="utf-8") as f:
@@ -64,8 +67,9 @@ def load_labels(path: str) -> List[ClipLabel]:
             clip = (row.get("clip") or "").strip()
             if not clip:
                 raise ValueError(f"{path}:{i}: clip is empty")
+            cfg = (row.get("config") or "").strip()
             out.append(ClipLabel(os.path.join(base, clip), (row.get("scenario") or "").strip(), exp,
-                                 (row.get("notes") or "").strip()))
+                                 (row.get("notes") or "").strip(), os.path.join(base, cfg) if cfg else ""))
     return out
 
 
