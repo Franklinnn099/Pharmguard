@@ -83,3 +83,7 @@ data/
 *.png
 !assets/*.png
 !assets/*.jpg
+
+# Evaluation clips and results (people's faces; never commit)
+clips/
+evaluation_results.csv

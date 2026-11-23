@@ -99,6 +99,15 @@ python tools/e2e_benchmark.py --url http://127.0.0.1:7860   # browser-equivalent
 
 ---
 
+## Inventory & Evaluation
+
+- **Inventory tab**: register products on the camera's shelf zones, record sales, restocks, write-offs and physical counts.
+  **Reconcile** cross-checks each zone's stock shortfall with recorded REVIEW/ALERT events (CORROBORATED,
+  UNEXPLAINED_LOSS, NO_SHORTFALL, OK). Data: `data/inventory.db`.
+- **Evaluation**: record the staged clip set in `docs/EVALUATION_PLAN.md`, then
+  `python tools/evaluate_clips.py clips/labels.csv --config configs/eval_shelf.yaml --fps 5` prints recall,
+  precision and false-alarm rate. Known limitations: `docs/LIMITATIONS.md`.
+
 ## Project Documentation
 
 - [PROJECT_STATUS.md](PROJECT_STATUS.md): Complete list of completed features, incomplete features, known issues, and next priorities.

@@ -204,6 +204,19 @@ class EventStore:
             rows = self._conn.execute("SELECT severity, COUNT(*) AS n FROM events GROUP BY severity").fetchall()
         return {r["severity"]: r["n"] for r in rows}
 
+    def zone_event_counts(self, start_epoch: float, end_epoch: float,
+                          exclude_false_alarms: bool = False) -> Dict[str, Dict[str, int]]:
+        """Per zone, REVIEW (WARNING) and ALERT counts recorded in [start, end]. Used by inventory reconciliation."""
+        sql = ("SELECT zone, severity, COUNT(*) AS n FROM events WHERE created_epoch >= ? AND created_epoch <= ?"
+               + (" AND review_status != 'false_alarm'" if exclude_false_alarms else "")
+               + " GROUP BY zone, severity")
+        with self._lock:
+            rows = self._conn.execute(sql, (start_epoch, end_epoch)).fetchall()
+        out: Dict[str, Dict[str, int]] = {}
+        for r in rows:
+            out.setdefault(r["zone"] or "", {})[r["severity"]] = r["n"]
+        return out
+
     # ------------------------------------------------------------------ maintenance
     def purge_older_than(self, days: float) -> int:
         """Delete events (and their clip files) older than ``days``. Returns events deleted."""

@@ -27,8 +27,11 @@ pharmguard/
 ├── benchmark.py                    # Server-side compute benchmark (incl. return-frame encode)
 ├── docs/AUDIT_2026-11-19.md        # Takeover audit: verified defects, measurements, risks
 ├── docs/DEMO_STAGING.md            # Camera placement, zone setup, staged scenario protocol
+├── docs/EVALUATION_PLAN.md         # 36-clip staged test set, labels.csv format, scoring rules
+├── docs/LIMITATIONS.md             # Known limitations for the report/defence
 ├── configs/demo_shelf.yaml         # Demo zones/thresholds (pass with --config)
 ├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
+├── tools/evaluate_clips.py         # Score labelled clips: recall, precision, false-alarm rate
 ├── tools/track_video.py            # Run pipeline on recorded video (video time); tracking report + annotated MP4
 │
 ├── pharmaguard/                    # Core Python package
@@ -50,6 +53,9 @@ pharmguard/
 │   ├── ui.py                       # Dashboard layout: alarm strip + Live monitor tab, wiring
 │   ├── ui_review.py                # Event review tab: table, details, clip, staff verdicts, FA rate
 │   ├── ui_zones.py                 # Zone editor tab: click-to-draw, apply live, save to configs/
+│   ├── ui_inventory.py             # Inventory tab: products, movements, counts, reconciliation
+│   ├── inventory.py                # SQLite InventoryStore + stock vs camera-event reconciliation
+│   ├── evaluation.py               # Clip labels, per-clip run in video time, clip-level metrics
 │   └── app.py                      # CLI launcher with local & Colab presets
 │
 ├── colab/                          # Google Colab execution artifacts
@@ -66,6 +72,8 @@ pharmguard/
     ├── test_alerts.py              # Cooldown throttling & persistence tests
     ├── test_alarm.py               # Alarm state machine, dedupe, ack/reset/test, pipeline integration
     ├── test_recording.py           # Event store, clips, retention, mirroring, pipeline integration
+    ├── test_inventory.py           # Expected stock, validation, four reconciliation outcomes
+    ├── test_evaluation.py          # Clip scoring and labels.csv loading
     ├── test_dashboard.py           # Zone editor logic/safety, live zone updates, review tab
     ├── test_pipeline.py            # End-to-end vision pipeline integration tests
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
@@ -117,7 +125,7 @@ python benchmark.py
 7. **Type Annotations**: Use Python type hints throughout all modules. Validate dataclasses or Pydantic models for configuration.
 8. **Real-time transport rules (measured, see TECHNICAL_DECISIONS §3)**: return frames as JPEG (never Gradio's default WebP), request a 640x480 webcam capture, downscale server-side, and keep the per-frame stream event image-only (panels refresh via a 1 Hz timer). The primary live path is the fast stream (`POST /pg/frame`, several frames in flight, §12); keep processing strictly in frame order.
 9. **Measurement honesty**: never print or document a metric that was not measured (e.g. hard-coded "dropped frames"). Label compute-only vs end-to-end figures explicitly.
-10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG` and `PHARMAGUARD_DATA_DIR`. Never commit `data/` (event DB and clips contain people's faces).
+10. **Tests must not touch operational data**: `tests/conftest.py` redirects `PHARMAGUARD_ALERT_LOG` and `PHARMAGUARD_DATA_DIR`. Never commit `data/` (event DB and clips contain people's faces) or evaluation clips.
 11. **Never open SQLite on a Drive/FUSE mount**: write locally and use `EventStore.mirror()` (backup API).
 
 ---

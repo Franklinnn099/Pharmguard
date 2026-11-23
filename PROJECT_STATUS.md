@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control §17; prediction jitter fix §18; siren via fast stream + duplicate-pose suppression §19; bent-elbow pocket rule + faster alarm §20)
+**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control §17; prediction jitter fix §18; siren via fast stream + duplicate-pose suppression §19; bent-elbow pocket rule + faster alarm §20); 2026-11-23: inventory + reconciliation §21, clip evaluation tool §22
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 155 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
+**Test suite**: 165 passed (`python -m pytest tests/ -q`, Linux, CPU, Python 3.13, torch 2.15, 2026-11-23)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -38,6 +38,8 @@
 | Event review: table, details, **clip playback in browser**, staff verdict persisted + audited, false-alarm rate from verdicts | 19 tests + Chrome on seeded real recordings (TECHNICAL_DECISIONS §10) |
 | Zone editor: click-to-draw on live snapshot, validation, apply live (next frame), save confined to `configs/*.yaml` | Tests + Chrome (corner clicks register) |
 | Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
+| Inventory: products per shelf zone, sales/restock/write-off/count, expected = last count + movements; reconciliation per zone (CORROBORATED / UNEXPLAINED_LOSS / NO_SHORTFALL / OK) against recorded events, optionally ignoring staff-marked false alarms | `tests/test_inventory.py` (6 tests, incl. a real EventStore); Inventory tab handlers driven through the built Gradio app |
+| Clip evaluation: labels.csv → per-clip outcome, recall / precision / false-alarm / review rates | `tests/test_evaluation.py` (scoring); `tools/evaluate_clips.py` run end-to-end on a generated still-image clip with real YOLO (correct `none`, missing file reported as error) |
 | Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
 
 ## 2. Measured performance (dev laptop, CPU only — NOT the demo hardware)
@@ -84,7 +86,8 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 
 | Ref | Defect | Planned |
 |---|---|---|
-| P3-1 | **False-alert / miss rates on real staged footage are unmeasured.** Logic is verified only on scripted skeletons | Owner records the scenarios in docs/DEMO_STAGING.md |
+| P3-1 | **False-alert / miss rates on real staged footage are unmeasured.** Logic is verified only on scripted skeletons | Owner records the 36 clips in docs/EVALUATION_PLAN.md and runs `tools/evaluate_clips.py` |
+| I-1 | Inventory sales/counts are entered by hand; no POS import. Reconciliation links shortfall to events by zone and period, not by item | Stated in docs/LIMITATIONS.md |
 | P3-4 | Since §13, an item held at hip height > 4 s without being put back raises an ALERT (was REVIEW). Trade-off for a realistic pocket/bag trigger | Check in staged scenario 5 |
 | P3-2 | A relaxed hand at the hip registers as "pocket" on real imagery (harmless unless within 3 s after a shelf contact by the same hand); `pocket_radius_torso` uncalibrated | Calibrate on staged clips |
 | P3-3 | CPU only: pose + bag detection caps compute at ~6.9 FPS (11.6 FPS without bags). GPU unmeasured | Colab run |
@@ -99,9 +102,10 @@ Localhost has no network latency. Over the `gradio.live` tunnel, each frame make
 All six engineering priorities are implemented and tested locally. What remains is measurement on the real setup:
 
 1. **Owner — live Colab run** (Section 3, with Drive mounted): first real GPU, tunnel, clip-encoding and Drive numbers.
-2. **Owner — staged scenarios** (`docs/DEMO_STAGING.md`): draw the zone in the Zones tab, run all 10 scenarios, review every
+2. **Owner — evaluation clips** (`docs/EVALUATION_PLAN.md`): record the 36 clips, run `tools/evaluate_clips.py`, paste the summary into the report.
+3. **Owner — staged scenarios** (`docs/DEMO_STAGING.md`): draw the zone in the Zones tab, run all 10 scenarios, review every
    event in the Event review tab. This yields the **measured false-alert and miss rates** the mandate requires.
-3. **Nov 29–30:** fix whatever the staged runs expose (likely `pocket_radius_torso` and thresholds), record the fallback video,
+4. **Nov 29–30:** fix whatever the staged runs expose (likely `pocket_radius_torso` and thresholds), record the fallback video,
    and rehearse with the alarm checks (DEMO_STAGING §5).
 
 ## 6. How to run

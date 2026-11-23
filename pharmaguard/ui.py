@@ -19,6 +19,7 @@ from pharmaguard.pipeline import PharmaGuardPipeline, PipelineOutput
 from pharmaguard.config import PharmaGuardConfig
 from pharmaguard.telemetry import TelemetrySnapshot
 from pharmaguard.alarm import AlarmSnapshot
+from pharmaguard.ui_inventory import build_inventory_tab
 from pharmaguard.ui_review import build_review_tab
 from pharmaguard.ui_zones import build_zones_tab
 from pharmaguard.fast_stream import FAST_STREAM_HEAD, FAST_STREAM_HTML
@@ -496,6 +497,9 @@ def create_pharmaguard_ui(
             with gr.Tab("Zones"):
                 build_zones_tab(pipeline, config_path)
 
+            with gr.Tab("Inventory"):
+                inventory_loader = build_inventory_tab(pipeline)
+
         panel_outputs = [status_val, tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
 
         apply_btn.click(fn=update_thresholds, inputs=[conf_slider, dwell_slider], outputs=[cfg_status])
@@ -545,6 +549,9 @@ def create_pharmaguard_ui(
             load_fn, load_in, load_out = review_loader
             demo.load(load_fn, load_in, load_out)
             review_tab.select(load_fn, load_in, load_out)
+        # Inventory: stock table + product list on page load.
+        inv_fn, inv_in, inv_out = inventory_loader
+        demo.load(inv_fn, inv_in, inv_out)
 
         # Panels: 1 Hz, off the per-frame path.
         timer = gr.Timer(1.0)

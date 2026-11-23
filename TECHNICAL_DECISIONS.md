@@ -581,3 +581,36 @@ the band for 8 s: nothing (with the arm check disabled the same script raises an
 Shelf -> pocket with a bent elbow: one ALERT within hold + keep window. All earlier scenarios unchanged (155 tests).
 **Not verified on real footage**; the 160 deg threshold and band are first estimates for calibration on staged clips.
 "Dots change late" is network lag (GPU compute is not the bottleneck); not changed here.
+
+
+---
+
+## 21. Inventory Module + Stock vs Camera Reconciliation (2026-11-23)
+
+### Context
+The project scope is CV + inventory + dashboard; the repository had no inventory component.
+
+### Decision
+- `pharmaguard/inventory.py`: separate SQLite file `inventory.db` in `recording.data_dir` (same one-connection-plus-lock
+  pattern as `EventStore`, never on a Drive mount). Tables: `products` (SKU, name, **zone**, unit price GH¢),
+  `movements` (opening / restock / sale / writeoff, positive quantities), `counts` (counted and expected quantity).
+- Expected quantity = last physical count + signed movements after it. A count records the shortfall at that moment.
+- Products are assigned to the **same zone names** as the camera's shelf zones. That is the link between the two systems.
+- Reconciliation per zone over a period: shortfall from counts taken in the period vs REVIEW/ALERT counts from
+  `EventStore.zone_event_counts()` (optionally excluding events staff marked false alarm):
+  CORROBORATED (both), UNEXPLAINED_LOSS (shortfall only), NO_SHORTFALL (events only), OK.
+- UNEXPLAINED_LOSS covers what the camera cannot: palmed items, blind spots, and stock removed outside procedure
+  (including by staff), without pointing the behaviour rules at employees.
+- Dashboard: new **Inventory** tab (`pharmaguard/ui_inventory.py`). Wording stays "review", never "theft".
+
+### Rejected
+- Per-item linking of events to products: the camera sees hands, not products. Claiming item-level attribution would be false.
+- POS integration: out of scope before Dec 1.
+
+## 22. Clip-Level Evaluation Tool (2026-11-23)
+
+`pharmaguard/evaluation.py` + `tools/evaluate_clips.py` run a fresh pipeline per labelled clip in video time
+(same as `tools/track_video.py`), recording disabled, and score at clip level: recall, flag recall, precision,
+false-alarm rate, REVIEW rate, median time to first ALERT, per-scenario accuracy. Clip level was chosen because an
+examiner can verify each outcome by watching the clip. Protocol and the 36-clip set: `docs/EVALUATION_PLAN.md`.
+Limitations for the report: `docs/LIMITATIONS.md`.
