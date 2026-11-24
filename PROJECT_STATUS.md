@@ -1,9 +1,9 @@
 # PharmaGuard — Project Status Report
 
-**Last updated**: 2026-11-22 (fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control §17; prediction jitter fix §18; siren via fast stream + duplicate-pose suppression §19; bent-elbow pocket rule + faster alarm §20)
+**Last updated**: 2026-11-24 (phone cameras §21; fast stream transport §12; "item not returned" alarm trigger §13; pocket detection + diagnostics §14; smooth display mode §15; synced boxes §16; delay control §17; prediction jitter fix §18; siren via fast stream + duplicate-pose suppression §19; bent-elbow pocket rule + faster alarm §20)
 **Milestone**: December 1, 2026 live demonstration
 **Demo setup (decided 2026-11-19)**: laptop webcam facing a **mock shelf**; people stand in front of it.
-**Test suite**: 155 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-22)
+**Test suite**: 161 passed (`python -m pytest tests/ -v`, dev laptop, CPU, Python 3.13, 2026-11-24)
 
 > Every item below is marked by how it was verified. "Unverified" means it was not executed.
 > The previous version of this file contained claims that the audit found false. See `docs/AUDIT_2026-11-19.md`.
@@ -39,6 +39,7 @@
 | Zone editor: click-to-draw on live snapshot, validation, apply live (next frame), save confined to `configs/*.yaml` | Tests + Chrome (corner clicks register) |
 | Pinned requirements == tested environment | `pip install --dry-run -r requirements.txt` → nothing to change |
 | Gradio analytics disabled | Startup log no longer shows `huggingface.co` / `api.gradio.app` requests |
+| Phone cameras (`pharmguard-camera/`): PWA → WebSocket → real PharmaGuard pipeline per phone; QR pairing; `/monitor`, `/view/{id}` MJPEG, `/api/cameras`; dashboard "Phone cameras" tab | `tests/test_phone_cameras.py` (6 tests: protocol order, routes, CORS, MJPEG, real YOLO per-camera state). Live server on the LAN IP: all routes 200; `test_client.py` 12/12 frames acked in order, 3 persons on bus.jpg; 2 fake phones at once: 15/15 each, separate track IDs. **Not yet tested with a real phone or in a browser** (dashboard tab, PWA overlay) |
 
 ## 2. Measured performance (dev laptop, CPU only — NOT the demo hardware)
 
@@ -107,6 +108,7 @@ All six engineering priorities are implemented and tested locally. What remains 
 ## 6. How to run
 
 ```powershell
+pharmguard-camera\server\.venv\Scripts\python pharmguard-camera\server\main.py   # phone cameras, port 8000 (see pharmguard-camera/README.md)
 python -m pytest tests/ -v
 python main.py --local --port 7860            # http://127.0.0.1:7860
 python benchmark.py                           # server compute

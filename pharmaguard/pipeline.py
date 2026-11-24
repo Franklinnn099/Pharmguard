@@ -305,6 +305,7 @@ class PharmaGuardPipeline:
         for tid, person in tracking_result.tracked_persons.items():
             x1, y1, x2, y2 = [float(v) for v in person.current_box]
             entry: Dict[str, Any] = {"id": int(tid), "box": [nx(x1), ny(y1), nx(x2), ny(y2)],
+                                     "conf": round(float(person.confidence), 3),
                                      "occluded": person.frames_lost > 0, "in_shelf": bool(person.in_shelf_zone)}
             view = self.behavior_analyzer.person_view(tid)
             if view is not None and person.frames_lost == 0:

@@ -50,7 +50,15 @@ pharmguard/
 │   ├── ui.py                       # Dashboard layout: alarm strip + Live monitor tab, wiring
 │   ├── ui_review.py                # Event review tab: table, details, clip, staff verdicts, FA rate
 │   ├── ui_zones.py                 # Zone editor tab: click-to-draw, apply live, save to configs/
+│   ├── ui_phones.py                # Phone cameras tab: /view MJPEG tiles + /api/cameras status from pharmguard-camera
 │   └── app.py                      # CLI launcher with local & Colab presets
+│
+├── pharmguard-camera/              # Phone as camera (own venv; see its README.md)
+│   ├── pwa/                        # Phone web app: camera -> WebSocket -> draws returned boxes
+│   └── server/                     # FastAPI: /ws/camera, /pair + QR, /monitor, /view/{id}, /api/cameras
+│       ├── main.py                 # process_frame(camera_id, frame) -> PharmaGuard pipeline
+│       ├── pg_bridge.py            # One PharmaGuardPipeline per camera, shared lock-protected model
+│       └── test_client.py          # Fake phone: sends JPEGs, checks ordered replies
 │
 ├── colab/                          # Google Colab execution artifacts
 │   ├── PharmaGuard_Colab.ipynb     # Turnkey Colab notebook with live tunnel (no Drive mount yet)
@@ -71,6 +79,7 @@ pharmguard/
     ├── test_live_streaming_integration.py  # UI handlers, transport config, live server
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip
     ├── test_fast_stream.py         # Fast stream ordering, login, real server round trip
+    ├── test_phone_cameras.py       # Phone-camera server: WS protocol, routes, per-camera real pipeline, dashboard tab
     └── conftest.py                 # Redirects alert log so tests never touch logs/
 ```
 

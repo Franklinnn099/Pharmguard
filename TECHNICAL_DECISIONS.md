@@ -581,3 +581,30 @@ the band for 8 s: nothing (with the arm check disabled the same script raises an
 Shelf -> pocket with a bent elbow: one ALERT within hold + keep window. All earlier scenarios unchanged (155 tests).
 **Not verified on real footage**; the 160 deg threshold and band are first estimates for calibration on staged clips.
 "Dots change late" is network lag (GPU compute is not the bottleneck); not changed here.
+
+## 21. Phone Cameras over WebSocket (2026-11-24, owner request: "my phone acts as PharmGuard's camera")
+
+**What:** `pharmguard-camera/` — a PWA the phone opens, and a FastAPI server (port 8000, separate from the Gradio dashboard)
+that receives JPEG frames on `WS /ws/camera?cam=NAME` and runs each through `PharmaGuardPipeline`. Pairing link
+`http://LAN_IP:8000/?cam=NAME&start=1` (QR in the terminal and at `/pair`). Protocol and endpoints: `pharmguard-camera/README.md`.
+
+**Decisions:**
+- **One `PharmaGuardPipeline` per camera_id** (tracker, behaviour engine, alerts, alarm, event store/evidence with
+  `recording.camera_id = NAME`). **One shared detector** (pose + bag model) behind a lock: memory does not grow per phone,
+  and ultralytics `predict()` is not thread-safe. Throughput is therefore split between phones (measured on CPU, dev laptop,
+  bus.jpg at 640x853: 1 phone ~2.9 frames/s round trip, 2 phones ~1.5 frames/s each).
+- **WebSocket here, unlike §12's plain HTTP**, because the phone is on the LAN (no tunnel) and one socket per phone gives
+  ordered frames for free. Exactly one reply per frame (`detections` or `skipped`), so the phone keeps <= 2 in flight; the
+  server only ever processes the newest frame, so a slow laptop drops frames rather than building delay.
+- **Return format** `{x1,y1,x2,y2,label,conf,alert}` normalized to [0,1] (convention 3), plus `level`/`track_id`/`score`.
+  `alert` = person at REVIEW or ALERT level, i.e. "for staff review"; the siren follows ALERT only (convention 5).
+- `pipeline._overlay_payload` gained a `conf` key per person (additive).
+- Dashboard: "Phone cameras" tab (`pharmaguard/ui_phones.py`) shows `<img src="{server}/view/{id}">` tiles, polls
+  `/api/cameras` at 1 Hz, offers Acknowledge/Reset and plays its own siren while a phone camera's alarm sounds. The camera
+  server allows the dashboard origin via CORS (`PG_CORS_ORIGINS`). New CLI flag `--phone-cameras URL`.
+- Server dependencies live in `pharmguard-camera/server/requirements.txt` (own venv; adds `fastapi`, `uvicorn[standard]`,
+  `qrcode`); the main `requirements.txt` is unchanged. `PG_DETECTOR=none` runs without torch (no detection, frames only).
+
+**Risks / not done:** the camera server has **no login**: anyone on the Wi-Fi can view feeds (faces) and acknowledge
+alarms. One zone config (`PG_CONFIG`) for all phones. Plain HTTP needs Chrome's insecure-origin flag on each phone.
+Not yet tested with a real phone or in a real browser.
