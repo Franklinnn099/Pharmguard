@@ -52,6 +52,18 @@ def test_option1_clones_the_phone_branch_and_stops_on_failure():
     assert src.index("raise SystemExit(f\"❌ {TARGET_DIR} does not exist") < src.index("os.chdir(TARGET_DIR)")
 
 
+def test_option1_install_keeps_colab_cuda_torch():
+    src = _cell("INSTALLING PHARMAGUARD DEPENDENCIES")
+    compile(src, "<cell>", "exec")
+    assert '"-r", "requirements.txt", "-c", KEEP_TORCH' in src
+    assert 'KEEP_TORCH = "/content/keep_torch.txt"' in src and 'KEEP_TORCH = "/content/keep_torch.txt"' in _cell("# O2-4")
+    assert src.index("pip") < src.index('assert cuda and cuda[-1] == "True"')
+    # Pin the INSTALLED distribution versions (what pip compares); torch.__version__ can carry a '+cpu' label
+    # that the metadata lacks, which made pip report ResolutionImpossible (seen on the dev laptop).
+    for cell in (src, _cell("# O2-4")):
+        assert "_v('torch')" in cell and "_v('torchvision')" in cell and "torch.__version__}\n" not in cell
+
+
 def test_measure_cells_go_through_the_tunnel_with_the_key():
     cells = ["".join(c["source"]) for c in json.load(open(NB, encoding="utf-8"))["cells"]]
     m = [s for s in cells if s.startswith("# M-")]
