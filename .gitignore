@@ -83,3 +83,15 @@ data/
 *.png
 !assets/*.png
 !assets/*.jpg
+
+# Phone-camera TLS material (private key!)
+pharmguard-camera/server/certs/
+# Any other frame/clip/snapshot formats (faces) and local debris
+*.jpeg
+*.webp
+*.heic
+*.mov
+*.mkv
+*.gif
+*.stackdump
+graphify-out/
