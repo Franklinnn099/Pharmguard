@@ -14,6 +14,7 @@ Everything runs in the browser (Gradio's ``gr.HTML`` does not execute scripts, s
 (``PG_CORS_ORIGINS``, default http://127.0.0.1:7860 and http://localhost:7860).
 """
 
+import os
 from html import escape
 from typing import Optional
 
@@ -42,12 +43,13 @@ PHONE_CAMERAS_HEAD = """
   };
   const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const serverOf = (root) => (root.dataset.server || (location.protocol + '//' + location.hostname + ':8000')).replace(/\\/$/, '');
+  const keyOf = (root) => root.dataset.key ? '?key=' + encodeURIComponent(root.dataset.key) : '';
   const tiles = {};
 
   window.pgPhoneAction = async (cam, action) => {
     const root = document.getElementById('pg-phones'); if (!root) return;
     try {
-      await fetch(serverOf(root) + '/api/cameras/' + encodeURIComponent(cam) + '/' + action,
+      await fetch(serverOf(root) + '/api/cameras/' + encodeURIComponent(cam) + '/' + action + keyOf(root),
         {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({operator: 'dashboard'})});
     } catch (e) {}
   };
@@ -58,7 +60,7 @@ PHONE_CAMERAS_HEAD = """
     const grid = root.querySelector('.pg-phone-grid'), info = root.querySelector('.pg-phone-info');
     const server = serverOf(root);
     let j;
-    try { j = await (await fetch(server + '/api/cameras', {cache: 'no-store'})).json(); }
+    try { j = await (await fetch(server + '/api/cameras' + keyOf(root), {cache: 'no-store'})).json(); }
     catch (e) {
       info.innerHTML = 'Camera server not reachable at <code>' + esc(server) + '</code>. Start it with ' +
         '<code>pharmguard-camera\\\\server\\\\.venv\\\\Scripts\\\\python main.py</code>.';
@@ -74,7 +76,7 @@ PHONE_CAMERAS_HEAD = """
       let t = tiles[c.camera_id];
       if (!t || !t.isConnected) {
         t = document.createElement('div'); t.className = 'pg-phone-tile';
-        t.innerHTML = '<img alt="Camera ' + esc(c.camera_id) + '" src="' + server + '/view/' + encodeURIComponent(c.camera_id) + '">' +
+        t.innerHTML = '<img alt="Camera ' + esc(c.camera_id) + '" src="' + server + '/view/' + encodeURIComponent(c.camera_id) + keyOf(root) + '">' +
           '<div class="pg-phone-meta"></div>';
         grid.appendChild(t); tiles[c.camera_id] = t;
       }
@@ -121,6 +123,8 @@ PHONE_CAMERAS_HEAD = """
 def phone_cameras_html(server_url: Optional[str] = None) -> str:
     """Container the head script fills in. ``server_url`` None = same host as the dashboard, port 8000."""
     attr = f' data-server="{escape(server_url.rstrip("/"))}"' if server_url else ""
+    key = os.environ.get("PG_ACCESS_KEY", "").strip()   # camera server's key; the dashboard is behind its own login
+    attr += f' data-key="{escape(key)}"' if key else ""
     return (f'<div id="pg-phones"{attr}><div class="pg-phone-info">Connecting to the phone camera server…</div>'
             '<div class="pg-phone-empty">No phone cameras yet. Start the camera server and scan its QR code '
             'with a phone.</div><div class="pg-phone-grid"></div></div>')

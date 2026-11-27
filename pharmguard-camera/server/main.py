@@ -67,6 +67,12 @@ SSL_KEY = os.environ.get("PG_SSL_KEY") or str(CERT_DIR / "key.pem")
 TLS = os.path.exists(SSL_CERT) and os.path.exists(SSL_KEY)
 HTTPS_PORT = int(os.environ.get("PG_HTTPS_PORT", "8443"))
 CA_CERT = CERT_DIR / "ca.crt"     # PUBLIC root certificate only; the CA's private key never leaves the laptop
+# Optional shared secret (needed on a public tunnel, e.g. Colab + cloudflared). Unset = no check (laptop/LAN mode).
+# Accepted as ?key=, header X-PG-Key or the pg_key cookie, which is set from a valid ?key= so pages, <img> streams
+# and fetches on this origin keep working after one QR scan.
+ACCESS_KEY = os.environ.get("PG_ACCESS_KEY", "").strip()
+# Static PWA shell: no camera data, and the manifest is fetched without cookies, so it stays public.
+PUBLIC_PATHS = {"/", "/index.html", "/app.js", "/sw.js", "/manifest.webmanifest", "/icon.svg", "/ca.crt"}
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_IN_FLIGHT = 2
 VIEW_JPEG_QUALITY = 75
@@ -101,7 +107,18 @@ def phone_base_url() -> str:
 
 
 def pair_url(cam: str) -> str:
-    return f"{phone_base_url()}/?cam={cam}&start=1"
+    return f"{phone_base_url()}/?cam={cam}&start=1" + key_query("&")
+
+
+def key_query(sep: str = "?") -> str:
+    """'' without a key, else '?key=...' (or '&key=...') to append to a link."""
+    from urllib.parse import quote
+    return f"{sep}key={quote(ACCESS_KEY)}" if ACCESS_KEY else ""
+
+
+def key_ok(*candidates: Optional[str]) -> bool:
+    import hmac
+    return not ACCESS_KEY or any(c and hmac.compare_digest(c.encode(), ACCESS_KEY.encode()) for c in candidates)
 
 
 def phone_setup_html() -> str:
@@ -190,14 +207,32 @@ app = FastAPI(title="PharmGuard camera server", lifespan=lifespan)
 # The PharmaGuard dashboard (Gradio, port 7860) reads /api/cameras and posts ack/reset from the browser.
 _origins = [o.strip() for o in os.environ.get(
     "PG_CORS_ORIGINS", "http://127.0.0.1:7860,http://localhost:7860").split(",") if o.strip()]
+@app.middleware("http")
+async def require_key(request: Request, call_next):
+    """With PG_ACCESS_KEY set, every route except the static PWA shell needs the key (WebSocket: see ws_camera)."""
+    q = request.query_params.get("key")
+    if not key_ok(q, request.headers.get("x-pg-key"), request.cookies.get("pg_key")) \
+            and request.url.path not in PUBLIC_PATHS and request.method != "OPTIONS":
+        return Response("Access key required: open the link from the server's QR code.", status_code=401)
+    response = await call_next(request)
+    if ACCESS_KEY and q and key_ok(q):   # remember it for this origin's pages, <img> streams and fetches
+        https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+        response.set_cookie("pg_key", ACCESS_KEY, max_age=86400 * 30, httponly=True, samesite="lax", secure=https)
+    return response
+
+
+# Added after require_key so CORS wraps it: a 401 still carries CORS headers and preflights pass.
 app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST", "PUT", "DELETE"],
-                   allow_headers=["Content-Type"])
+                   allow_headers=["Content-Type", "X-PG-Key"])
 
 
 @app.websocket("/ws/camera")
 async def ws_camera(ws: WebSocket) -> None:
     cam = sanitize_cam(ws.query_params.get("cam"))
     await ws.accept()
+    if not key_ok(ws.query_params.get("key"), ws.cookies.get("pg_key")):
+        await ws.close(code=4001, reason="access key required")
+        return
     st = camera(cam)
     if st.ws is not None:                      # same name reconnecting (or a second phone): newest wins
         old = st.ws
@@ -459,7 +494,9 @@ def print_banner(cam: str = "phone1") -> None:
     print(f"   Objects:    {bridge.items_model}  (display only; PG_ITEMS=0 off, PG_ITEMS_IMGSZ=960 smaller objects)")
     print(f"   LAN IP:     {lan_ip()}")
     print(f"   Phone URL:  {url}")
-    print(f"   Pair page:  {base_url()}/pair     Monitor: {base_url()}/monitor")
+    print(f"   Pair page:  {base_url()}/pair{key_query()}     Monitor: {base_url()}/monitor{key_query()}")
+    if ACCESS_KEY:
+        print("   Access key: required on every page (PG_ACCESS_KEY); the links above and the QR include it")
     if TLS:
         print(f"   HTTPS:      {phone_base_url()}  (phones; iPhone needs this)")
         print(f"   iPhone, one-time: Safari -> {base_url()}/ca.crt -> Allow, then Settings -> Profile Downloaded")

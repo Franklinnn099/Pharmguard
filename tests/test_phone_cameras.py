@@ -15,9 +15,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SERVER_DIR = os.path.join(REPO, "pharmguard-camera", "server")
 
 
-def _load_server(monkeypatch, detector: str):
+def _load_server(monkeypatch, detector: str, access_key: str = ""):
     """Import server/main.py fresh under a unique module name (the repo root also has a main.py)."""
     monkeypatch.setenv("PG_DETECTOR", detector)
+    if access_key:
+        monkeypatch.setenv("PG_ACCESS_KEY", access_key)
+    else:
+        monkeypatch.delenv("PG_ACCESS_KEY", raising=False)
     monkeypatch.setenv("PG_NO_RECORDING", "1")
     monkeypatch.syspath_prepend(SERVER_DIR)
     sys.modules.pop("pg_bridge", None)
@@ -86,6 +90,69 @@ def test_http_routes_respond(monkeypatch):
     if importlib.util.find_spec("qrcode"):
         r = client.get("/pair/qr.svg?cam=front")
         assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg")
+
+
+PROTECTED_GETS = ["/monitor", "/pair", "/api/cameras", "/api/cameras/c1/zones", "/zones/c1",
+                  "/api/cameras/c1/snapshot.jpg", "/view/c1"]
+
+
+def test_access_key_denies_every_route_without_it(monkeypatch):
+    srv = _load_server(monkeypatch, "none", access_key="s3cret")
+    client = TestClient(srv.app)
+    for path in PROTECTED_GETS:
+        assert client.get(path).status_code == 401, path
+        assert client.get(path + "?key=wrong").status_code == 401, path
+    for path in ("/api/cameras/c1/ack", "/api/cameras/c1/reset"):
+        assert client.post(path, json={"operator": "x"}).status_code == 401, path
+    assert client.put("/api/cameras/c1/zones", json={"zones": []}).status_code == 401
+    assert client.delete("/api/cameras/c1/zones").status_code == 401
+    # The WebSocket is closed with 4001 before any hello or frame.
+    from starlette.websockets import WebSocketDisconnect
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/ws/camera?cam=c1") as ws:
+            ws.receive_json()
+    assert exc.value.code == 4001
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/camera?cam=c1&key=wrong") as ws:
+            ws.receive_json()
+    assert "c1" not in srv.cameras   # a rejected phone never creates camera state
+    # The static PWA shell has no camera data and stays reachable so the QR link can load.
+    assert client.get("/").status_code == 200 and client.get("/app.js").status_code == 200
+    assert client.get("/manifest.webmanifest").status_code == 200
+    # CORS headers survive a 401, so the dashboard sees a clean "unauthorised" instead of a CORS error.
+    r = client.get("/api/cameras", headers={"Origin": "http://127.0.0.1:7860"})
+    assert r.status_code == 401 and r.headers.get("access-control-allow-origin") == "http://127.0.0.1:7860"
+
+
+def test_access_key_allows_query_header_and_cookie(monkeypatch):
+    srv = _load_server(monkeypatch, "none", access_key="s3cret")
+    client = TestClient(srv.app)
+    assert client.get("/api/cameras", headers={"X-PG-Key": "s3cret"}).status_code == 200
+    assert client.post("/api/cameras/c1/ack", json={}, headers={"X-PG-Key": "s3cret"}).status_code == 200
+    # One visit with ?key= sets the cookie; later pages, <img> streams and fetches need nothing else.
+    r = client.get("/?cam=c1&start=1&key=s3cret")
+    assert r.status_code == 200 and "pg_key=s3cret" in r.headers.get("set-cookie", "").replace('"', "")
+    assert "httponly" in r.headers["set-cookie"].lower()
+    for path in PROTECTED_GETS[:-2]:   # snapshot 404s (no frame yet) and /view streams forever; checked below
+        assert client.get(path).status_code == 200, path
+    assert client.get("/api/cameras/c1/snapshot.jpg").status_code == 404   # past auth, just no frame yet
+    with client.websocket_connect("/ws/camera?cam=c1&key=s3cret") as ws:
+        assert ws.receive_json()["type"] == "hello"
+    # Pairing stays one scan: the QR/pair link carries the key.
+    assert srv.pair_url("c1").endswith("/?cam=c1&start=1&key=s3cret")
+    assert "key=s3cret" in client.get("/pair?cam=c1").text
+
+
+def test_no_access_key_keeps_laptop_mode_open(monkeypatch):
+    srv = _load_server(monkeypatch, "none")
+    client = TestClient(srv.app)
+    for path in PROTECTED_GETS[:-2]:
+        assert client.get(path).status_code == 200, path
+    assert client.post("/api/cameras/c1/ack", json={}).status_code == 200
+    assert "set-cookie" not in client.get("/?key=anything").headers
+    assert "key=" not in srv.pair_url("c1")
+    with client.websocket_connect("/ws/camera?cam=c1") as ws:
+        assert ws.receive_json()["type"] == "hello"
 
 
 def test_view_stream_serves_latest_frame_as_mjpeg(monkeypatch):
@@ -199,6 +266,15 @@ def test_dashboard_has_phone_cameras_tab():
     html = phone_cameras_html("http://192.168.1.5:8000/")
     assert 'data-server="http://192.168.1.5:8000"' in html
     assert "data-server" not in phone_cameras_html(None)
+
+
+def test_dashboard_tab_passes_camera_server_key(monkeypatch):
+    from pharmaguard.ui_phones import PHONE_CAMERAS_HEAD, phone_cameras_html
+    monkeypatch.delenv("PG_ACCESS_KEY", raising=False)
+    assert "data-key" not in phone_cameras_html(None)
+    monkeypatch.setenv("PG_ACCESS_KEY", 'k"<1')
+    assert 'data-key="k&quot;&lt;1"' in phone_cameras_html(None)   # escaped into the attribute
+    assert PHONE_CAMERAS_HEAD.count("keyOf(root)") == 3          # status poll, MJPEG <img>, ack/reset
 
 
 # --------------------------------------------------------------------------- per-camera zone editor

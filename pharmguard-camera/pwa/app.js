@@ -14,9 +14,15 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
   };
   camInput.value = clean(params.get('cam')) || clean(store.get('pg-cam')) || 'phone1';
+  // Access key from the QR link (servers with PG_ACCESS_KEY); kept so a reload or home-screen launch still connects.
+  if (params.get('key')) store.set('pg-key', params.get('key'));
+  const accessKey = store.get('pg-key') || '';
+  const keyQ = accessKey ? '&key=' + encodeURIComponent(accessKey) : '';
   // Zone editor for this camera (draws on the last frame the server received from it).
   const zonesLink = $('zones');
-  const syncZonesLink = () => { zonesLink.href = '/zones/' + encodeURIComponent(clean(camInput.value) || 'phone1'); };
+  const syncZonesLink = () => {
+    zonesLink.href = '/zones/' + encodeURIComponent(clean(camInput.value) || 'phone1') + keyQ.replace('&', '?');
+  };
   syncZonesLink();
   camInput.addEventListener('input', syncZonesLink);
 
@@ -71,7 +77,7 @@
     const cam = encodeURIComponent(clean(camInput.value) || 'phone1');
     try {
       await fetch('/api/cameras/' + cam + '/' + (alarmState === 'ACTIVE' ? 'ack' : 'reset'), { method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operator: 'phone ' + cam }) });
+        headers: { 'Content-Type': 'application/json', 'X-PG-Key': accessKey }, body: JSON.stringify({ operator: 'phone ' + cam }) });
     } catch { /* next reply shows the real state */ }
   };
 
@@ -144,7 +150,7 @@
   function connect(cam) {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     setStatus('Connecting…');
-    ws = new WebSocket(proto + '://' + location.host + '/ws/camera?cam=' + encodeURIComponent(cam));
+    ws = new WebSocket(proto + '://' + location.host + '/ws/camera?cam=' + encodeURIComponent(cam) + keyQ);
     ws.binaryType = 'arraybuffer';
     inFlight = 0;
     ws.onopen = () => { retry = 0; };
@@ -173,6 +179,10 @@
       dets = []; inFlight = 0;
       if (ev.code === 4000) {   // another phone took this camera name
         stop(); showError('Another device connected as "' + cam + '". Pick a different camera name.');
+        return;
+      }
+      if (ev.code === 4001) {   // server has PG_ACCESS_KEY and ours is missing or wrong
+        stop(); showError('Access key missing or wrong. Scan the QR code from the camera server again.');
         return;
       }
       const delay = Math.min(5000, 500 * 2 ** retry++);
