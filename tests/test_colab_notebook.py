@@ -35,6 +35,23 @@ def test_option2_cells_compile_and_run_in_order():
         assert marker in cells[i], (i + 1, marker)
 
 
+def _cell(prefix_or_marker: str) -> str:
+    for c in json.load(open(NB, encoding="utf-8"))["cells"]:
+        s = "".join(c["source"])
+        if prefix_or_marker in s:
+            return s
+    raise AssertionError(prefix_or_marker)
+
+
+def test_option1_clones_the_phone_branch_and_stops_on_failure():
+    src = _cell("PHARMAGUARD REPOSITORY INITIALIZATION")
+    compile(src, "<cell>", "exec")
+    assert 'BRANCH = "feat/phone-cameras"' in src and '"--branch", BRANCH' in src
+    assert "http.extraHeader" in src and "x-access-token" in src          # same token method as O2-3
+    assert "raise SystemExit" in src
+    assert src.index("raise SystemExit(f\"❌ {TARGET_DIR} does not exist") < src.index("os.chdir(TARGET_DIR)")
+
+
 def test_measure_cells_go_through_the_tunnel_with_the_key():
     cells = ["".join(c["source"]) for c in json.load(open(NB, encoding="utf-8"))["cells"]]
     m = [s for s in cells if s.startswith("# M-")]
