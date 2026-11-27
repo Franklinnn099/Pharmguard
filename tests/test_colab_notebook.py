@@ -35,6 +35,16 @@ def test_option2_cells_compile_and_run_in_order():
         assert marker in cells[i], (i + 1, marker)
 
 
+def test_measure_cells_go_through_the_tunnel_with_the_key():
+    cells = ["".join(c["source"]) for c in json.load(open(NB, encoding="utf-8"))["cells"]]
+    m = [s for s in cells if s.startswith("# M-")]
+    assert len(m) == 2
+    for src in m:
+        compile(src, "<cell>", "exec")
+    assert 'TUNNEL_URL.replace("https://", "wss://")' in m[0] and '"--key", PG_ACCESS_KEY' in m[0]
+    assert 'for items in ("1", "0")' in m[0] and 'os.environ["PG_ITEMS"] = "1"' in m[0]   # ends on the demo setting
+
+
 def test_option2_keeps_safety_rules():
     cells = _option2_cells()
     joined = "\n".join(cells)

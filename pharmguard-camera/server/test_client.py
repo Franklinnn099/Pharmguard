@@ -4,6 +4,9 @@ Pretend to be a phone: send JPEG frames to /ws/camera and check that one reply c
     python test_client.py                          # 10 frames to ws://127.0.0.1:8000, camera "testcam"
     python test_client.py --url ws://192.168.1.20:8000 --frames 30 --cam bench
     python test_client.py --url wss://192.168.1.20:8443 --cafile certs/ca.crt     # HTTPS port (iPhone path)
+    python test_client.py --url wss://xxxx.trycloudflare.com --key KEY --frames 100 --in-flight 1 --quiet  # Colab tunnel
+
+The summary reports the measured send->reply round trip (p50/p95) and the server's own compute time per frame.
 
 Frames are Ultralytics' bus.jpg sample (real people, so the pipeline has something to detect) when
 ultralytics is installed, otherwise a synthetic image. Exits non-zero if any frame got no reply.
@@ -39,14 +42,24 @@ def sample_jpeg() -> bytes:
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])[1].tobytes()
 
 
-async def run(url: str, cam: str, frames: int, in_flight: int, cafile: str | None = None) -> int:
+def pct(values: list[float], p: float) -> float:
+    s = sorted(values)
+    return s[min(len(s) - 1, int(round(p / 100 * (len(s) - 1))))] if s else float("nan")
+
+
+async def run(url: str, cam: str, frames: int, in_flight: int, cafile: str | None = None, key: str = "",
+              quiet: bool = False) -> int:
     jpeg = sample_jpeg()
     replies: dict[int, dict] = {}
+    sent_at: dict[int, float] = {}
+    rtt_ms: list[float] = []
     ssl_ctx = None
     if url.startswith("wss://"):
         import ssl
         ssl_ctx = ssl.create_default_context(cafile=cafile)
-    async with websockets.connect(f"{url}/ws/camera?cam={cam}", max_size=8 * 1024 * 1024, ssl=ssl_ctx) as ws:
+    from urllib.parse import quote
+    key_q = f"&key={quote(key)}" if key else ""
+    async with websockets.connect(f"{url}/ws/camera?cam={cam}{key_q}", max_size=8 * 1024 * 1024, ssl=ssl_ctx) as ws:
         hello = json.loads(await ws.recv())
         print(f"hello: {hello}")
         assert hello["type"] == "hello", hello
@@ -56,10 +69,15 @@ async def run(url: str, cam: str, frames: int, in_flight: int, cafile: str | Non
             while sent < frames and sent - len(replies) < in_flight:
                 await ws.send(jpeg)
                 sent += 1
+                sent_at[sent] = time.perf_counter()
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=60))
             if msg["type"] in ("detections", "skipped"):
                 replies[msg["frame"]] = msg
-                if msg["type"] == "detections":
+                if msg["type"] == "detections" and msg["frame"] in sent_at:
+                    rtt_ms.append((time.perf_counter() - sent_at[msg["frame"]]) * 1000)
+                if quiet:
+                    pass
+                elif msg["type"] == "detections":
                     d = msg["detections"]
                     flagged = sum(1 for x in d if x.get("alert"))
                     print(f"  frame {msg['frame']:>3}: {len(d)} detection(s), {flagged} flagged, "
@@ -72,6 +90,11 @@ async def run(url: str, cam: str, frames: int, in_flight: int, cafile: str | Non
     order_ok = list(replies) == sorted(replies)
     print(f"\n{frames} sent, {len(replies)} acked ({processed} processed, {len(replies) - processed} skipped), "
           f"{frames / elapsed:.1f} frames/s round trip, replies in order: {order_ok}")
+    server_ms = [m["ms"] for m in replies.values() if m["type"] == "detections"]
+    if rtt_ms:   # send -> reply, measured here: network both ways + server queue + compute
+        print(f"round trip (end to end): p50 {pct(rtt_ms, 50):.0f} ms, p95 {pct(rtt_ms, 95):.0f} ms | "
+              f"server compute: p50 {pct(server_ms, 50):.0f} ms, p95 {pct(server_ms, 95):.0f} ms "
+              f"(= {1000 / max(pct(server_ms, 50), 1e-6):.1f} frames/s compute only)")
     last = next((m for m in reversed(list(replies.values())) if m["type"] == "detections"), None)
     if last and last["detections"]:
         print("sample detection:", json.dumps(last["detections"][0]))
@@ -89,8 +112,11 @@ def main() -> None:
     ap.add_argument("--frames", type=int, default=10)
     ap.add_argument("--in-flight", type=int, default=2)
     ap.add_argument("--cafile", default=None, help="CA certificate to trust for wss:// (e.g. certs/ca.crt)")
+    ap.add_argument("--key", default=os.environ.get("PG_ACCESS_KEY", ""),
+                    help="Access key, when the server has PG_ACCESS_KEY (default: that env var)")
+    ap.add_argument("--quiet", action="store_true", help="Only print the summary")
     a = ap.parse_args()
-    sys.exit(asyncio.run(run(a.url.rstrip("/"), a.cam, a.frames, a.in_flight, a.cafile)))
+    sys.exit(asyncio.run(run(a.url.rstrip("/"), a.cam, a.frames, a.in_flight, a.cafile, a.key, a.quiet)))
 
 
 if __name__ == "__main__":
