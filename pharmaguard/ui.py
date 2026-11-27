@@ -22,6 +22,7 @@ from pharmaguard.alarm import AlarmSnapshot
 from pharmaguard.ui_review import build_review_tab
 from pharmaguard.ui_zones import build_zones_tab
 from pharmaguard.fast_stream import FAST_STREAM_HEAD, FAST_STREAM_HTML
+from pharmaguard.ui_phones import PHONE_CAMERAS_HEAD, build_phones_tab
 
 
 # Custom styling for professional pharmacy security console
@@ -168,7 +169,7 @@ ALARM_HEAD = """
 </script>
 """
 
-DASHBOARD_HEAD = CLIENT_FPS_HEAD + ALARM_HEAD + FAST_STREAM_HEAD
+DASHBOARD_HEAD = CLIENT_FPS_HEAD + ALARM_HEAD + FAST_STREAM_HEAD + PHONE_CAMERAS_HEAD
 
 SIGNAL_LABELS = {
     "LIVE": "LIVE",
@@ -299,8 +300,13 @@ def create_pharmaguard_ui(
     pipeline: PharmaGuardPipeline,
     config: Optional[PharmaGuardConfig] = None,
     config_path: Optional[str] = None,
+    phone_camera_server: Optional[str] = None,
 ) -> gr.Blocks:
-    """Construct the Gradio dashboard interface."""
+    """Construct the Gradio dashboard interface.
+
+    ``phone_camera_server``: URL of the phone-camera server (pharmguard-camera/server) whose feeds the
+    "Phone cameras" tab shows; None = same host as the dashboard, port 8000.
+    """
     cfg = config or pipeline.config
     stream_cfg = cfg.stream
     model_info = pipeline.detector.get_model_info()
@@ -431,6 +437,7 @@ def create_pharmaguard_ui(
                                     webcam_options=gr.WebcamOptions(
                                         mirror=False,
                                         constraints={"video": {
+                                            "facingMode": "environment",   # rear camera on phones; laptops ignore it
                                             "width": {"ideal": stream_cfg.capture_width},
                                             "height": {"ideal": stream_cfg.capture_height},
                                         }},
@@ -495,6 +502,9 @@ def create_pharmaguard_ui(
 
             with gr.Tab("Zones"):
                 build_zones_tab(pipeline, config_path)
+
+            with gr.Tab("Phone cameras"):
+                build_phones_tab(phone_camera_server)
 
         panel_outputs = [status_val, tracked_val, active_ids_val, fps_val, latency_val, alerts_box, events_box]
 

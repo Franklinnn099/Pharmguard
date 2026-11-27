@@ -16,7 +16,8 @@ import cv2
 import torch
 
 from pharmaguard.config import PharmaGuardConfig, DetectorConfig, ShelfZone
-from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult
+from pharmaguard.detector import BaseDetector, YOLODetector, DetectionResult, make_item_detector
+from pharmaguard.object_scan import AsyncObjectScanner, ScannedObject, visible
 from pharmaguard.tracker import ByteTrackerWrapper, TrackingResult, TrackedPerson
 from pharmaguard.behavior import PharmacyBehaviorAnalyzer, BehaviorEvent
 from pharmaguard.alerts import AlertManager, SecurityAlert
@@ -85,7 +86,15 @@ class PharmaGuardPipeline:
                 target_classes=oc.target_classes, device=self.config.detector.device,
                 imgsz=self.config.detector.imgsz, half_precision=self.config.detector.half_precision,
             ))
+        # Display-only object scan ("every object"), on a background thread. Never passed to the behaviour engine.
+        self.object_scanner: Optional[AsyncObjectScanner] = None
+        self.items: List[ScannedObject] = []
+        if self.config.items.enabled:
+            self.enable_object_scan(make_item_detector(
+                self.config.items, device=self.config.detector.device,
+                half_precision=self.config.detector.half_precision))
         self.bag_boxes: List[np.ndarray] = []
+        self.bag_confs: List[float] = []      # detector confidence per bag box (same order)
         self.last_raw_frame: Optional[np.ndarray] = None   # un-annotated RGB, for the zone editor snapshot
         self.alert_manager = AlertManager(self.config.alert)
         self.event_manager = EventManager()
@@ -155,6 +164,7 @@ class PharmaGuardPipeline:
         start_time = self.telemetry.mark_arrival()
         self.frame_counter += 1
         input_h, input_w = frame_rgb.shape[:2]
+        input_rgb = frame_rgb   # full resolution, for the object scan (small objects need the pixels)
 
         frame_rgb = normalize_frame(frame_rgb, self.config.stream.max_process_width)
         self.last_raw_frame = frame_rgb
@@ -187,13 +197,23 @@ class PharmaGuardPipeline:
             wanted = (not self.config.objects.on_demand) or self.behavior_analyzer.needs_bag_context(ts)
             if not wanted:
                 self.bag_boxes = []
+                self.bag_confs = []
                 self._bag_frames = 0
             else:
                 if getattr(self, "_bag_frames", 0) % self.config.objects.frame_stride == 0:
                     t_obj = time.perf_counter()
-                    self.bag_boxes = list(self.object_detector.detect(frame_bgr).xyxy)
+                    bag_result = self.object_detector.detect(frame_bgr)
+                    self.bag_boxes = list(bag_result.xyxy)
+                    self.bag_confs = [float(c) for c in bag_result.confidence]
                     objects_ms = (time.perf_counter() - t_obj) * 1000.0
                 self._bag_frames = getattr(self, "_bag_frames", 0) + 1
+
+        # 2c. Object scan for the operator display: hand the newest full-resolution frame to the background
+        #     scanner and draw whatever it found most recently. Not used by behaviour or alerts.
+        if self.object_scanner is not None:
+            src = input_rgb if input_rgb.ndim == 3 and input_rgb.shape[2] == 3 else frame_rgb
+            self.object_scanner.submit(cv2.cvtColor(src, cv2.COLOR_RGB2BGR))
+            self.items = self.object_scanner.latest()
 
         # 3. Behavioural analysis: hand-shelf-bag/pocket sequences and suspicion scoring
         t_beh_start = time.perf_counter()
@@ -225,6 +245,7 @@ class PharmaGuardPipeline:
         annotated_bgr = frame_bgr.copy()
         annotated_bgr = self.annotator.draw_shelf_zones(annotated_bgr, self.config.zones, zone_activity)
         annotated_bgr = self.annotator.draw_bags(annotated_bgr, self.bag_boxes)
+        annotated_bgr = self.annotator.draw_items(annotated_bgr, visible(self.items, self.config.items.show))
         annotated_bgr = self.annotator.draw_tracked_persons(
             annotated_bgr, tracking_result, views=self.behavior_analyzer.person_view)
 
@@ -257,6 +278,7 @@ class PharmaGuardPipeline:
             "detect_ms": round(detect_ms, 2),
             "track_ms": round(track_ms, 2),
             "objects_ms": round(objects_ms, 2),
+            "object_scan_ms": round(self.object_scanner.last_ms, 2) if self.object_scanner else 0.0,  # background
             "behavior_ms": round(behavior_ms, 2),
             "annotate_ms": round(annotate_ms, 2),
             "total_backend_ms": round(self.latency_ms, 2)
@@ -305,6 +327,7 @@ class PharmaGuardPipeline:
         for tid, person in tracking_result.tracked_persons.items():
             x1, y1, x2, y2 = [float(v) for v in person.current_box]
             entry: Dict[str, Any] = {"id": int(tid), "box": [nx(x1), ny(y1), nx(x2), ny(y2)],
+                                     "conf": round(float(person.confidence), 3),
                                      "occluded": person.frames_lost > 0, "in_shelf": bool(person.in_shelf_zone)}
             view = self.behavior_analyzer.person_view(tid)
             if view is not None and person.frames_lost == 0:
@@ -328,6 +351,10 @@ class PharmaGuardPipeline:
             "zones": [{"name": z.name, "polygon": z.polygon_normalized,
                        "state": zone_activity.get(z.name, "IDLE")} for z in self.config.zones],
             "bags": [[nx(b[0]), ny(b[1]), nx(b[2]), ny(b[3])] for b in self.bag_boxes],
+            "bag_conf": [round(c, 3) for c in self.bag_confs],
+            "items": [{"box": o.box, "label": o.label, "name": o.raw_name, "conf": o.conf, "key": o.key}
+                      for o in self.items],
+            "items_show": self.config.items.show,
             "persons": persons,
             "alarm": alarm.state,
             "sound": {"sounding": bool(alarm.sounding), "seq": int(alarm.sound_seq), "kind": alarm.kind,
@@ -366,8 +393,19 @@ class PharmaGuardPipeline:
         if self.store is not None and self.store.mirror_dir and self.evidence is not None:
             self.evidence.submit(self.store.mirror)
 
+    def enable_object_scan(self, detector: BaseDetector) -> None:
+        """Start the display-only background object scan with ``detector`` (may be shared between pipelines)."""
+        if self.object_scanner is not None:
+            self.object_scanner.close()
+        self.config.items.enabled = True
+        self.object_scanner = AsyncObjectScanner(detector, self.config.items,
+                                                 name=f"object-scan-{self.config.recording.camera_id}")
+
     def close(self) -> None:
         """Flush evidence clips and make the database durable (call on shutdown / end of video)."""
+        if self.object_scanner is not None:
+            self.object_scanner.close()
+            self.object_scanner = None
         if self.evidence is not None:
             self.evidence.flush()
             self.evidence.wait_idle(timeout=180)
@@ -436,6 +474,10 @@ class PharmaGuardPipeline:
             self.tracker.reset()
             self.behavior_analyzer.reset()
             self.bag_boxes = []
+            self.bag_confs = []
+            self.items = []
+            if self.object_scanner is not None:
+                self.object_scanner.clear()
             self.alert_manager.clear()
             self.alarm.reset(operator="system (tracking reset)")
             self.event_manager.clear()

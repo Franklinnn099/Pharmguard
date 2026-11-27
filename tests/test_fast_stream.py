@@ -111,6 +111,9 @@ def test_dashboard_head_contains_fast_client():
     from pharmaguard.ui import DASHBOARD_HEAD
     assert FAST_STREAM_HEAD in DASHBOARD_HEAD
     assert "pg/frame" in FAST_STREAM_HEAD
+    # Rear camera first (phones), webcam fallback (laptops); frames are never mirrored.
+    assert "cam({exact: 'environment'})" in FAST_STREAM_HEAD and "cam({ideal: 'environment'})" in FAST_STREAM_HEAD
+    assert "scaleX(-1" not in FAST_STREAM_HEAD and "scale(-1" not in FAST_STREAM_HEAD
 
 
 def _free_port() -> int:

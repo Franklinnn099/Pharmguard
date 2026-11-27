@@ -69,6 +69,8 @@ def parse_args():
                         help="Durable copy target, e.g. /content/drive/MyDrive/PharmaGuard (Colab + Drive)")
     parser.add_argument("--camera-id", type=str, default=None, help="Camera identifier stored with every event")
     parser.add_argument("--no-recording", action="store_true", help="Disable the event database and evidence clips")
+    parser.add_argument("--phone-cameras", type=str, default=None,
+                        help="Phone-camera server URL for the 'Phone cameras' tab (default: this host, port 8000)")
     parser.add_argument("--port", type=int, default=7860, help="Port to bind Gradio UI (default 7860)")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host interface (default 0.0.0.0)")
     parser.add_argument("--model", type=str, default=None, help="YOLO model name override (e.g. yolov8n.pt)")
@@ -136,7 +138,8 @@ def main():
 
     # 3. Build UI & Configure Queue for High-Speed Streaming
     print(f"[PharmaGuard] Building Gradio Security Operations Dashboard...")
-    demo = create_pharmaguard_ui(pipeline=pipeline, config=config, config_path=args.config)
+    demo = create_pharmaguard_ui(pipeline=pipeline, config=config, config_path=args.config,
+                                 phone_camera_server=args.phone_cameras)
 
     # Queue is required for streaming; the stream event itself is limited to 1 concurrent frame.
     demo.queue(default_concurrency_limit=2)

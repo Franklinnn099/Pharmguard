@@ -581,3 +581,136 @@ the band for 8 s: nothing (with the arm check disabled the same script raises an
 Shelf -> pocket with a bent elbow: one ALERT within hold + keep window. All earlier scenarios unchanged (155 tests).
 **Not verified on real footage**; the 160 deg threshold and band are first estimates for calibration on staged clips.
 "Dots change late" is network lag (GPU compute is not the bottleneck); not changed here.
+
+## 21. Phone Cameras over WebSocket (2026-11-24, owner request: "my phone acts as PharmGuard's camera")
+
+**What:** `pharmguard-camera/` — a PWA the phone opens, and a FastAPI server (port 8000, separate from the Gradio dashboard)
+that receives JPEG frames on `WS /ws/camera?cam=NAME` and runs each through `PharmaGuardPipeline`. Pairing link
+`http://LAN_IP:8000/?cam=NAME&start=1` (QR in the terminal and at `/pair`). Protocol and endpoints: `pharmguard-camera/README.md`.
+
+**Decisions:**
+- **One `PharmaGuardPipeline` per camera_id** (tracker, behaviour engine, alerts, alarm, event store/evidence with
+  `recording.camera_id = NAME`). **One shared detector** (pose + bag model) behind a lock: memory does not grow per phone,
+  and ultralytics `predict()` is not thread-safe. Throughput is therefore split between phones (measured on CPU, dev laptop,
+  bus.jpg at 640x853: 1 phone ~2.9 frames/s round trip, 2 phones ~1.5 frames/s each).
+- **WebSocket here, unlike §12's plain HTTP**, because the phone is on the LAN (no tunnel) and one socket per phone gives
+  ordered frames for free. Exactly one reply per frame (`detections` or `skipped`), so the phone keeps <= 2 in flight; the
+  server only ever processes the newest frame, so a slow laptop drops frames rather than building delay.
+- **Return format** `{x1,y1,x2,y2,label,conf,alert}` normalized to [0,1] (convention 3), plus `level`/`track_id`/`score`.
+  `alert` = person at REVIEW or ALERT level, i.e. "for staff review"; the siren follows ALERT only (convention 5).
+- `pipeline._overlay_payload` gained a `conf` key per person (additive).
+- Dashboard: "Phone cameras" tab (`pharmaguard/ui_phones.py`) shows `<img src="{server}/view/{id}">` tiles, polls
+  `/api/cameras` at 1 Hz, offers Acknowledge/Reset and plays its own siren while a phone camera's alarm sounds. The camera
+  server allows the dashboard origin via CORS (`PG_CORS_ORIGINS`). New CLI flag `--phone-cameras URL`.
+- Server dependencies live in `pharmguard-camera/server/requirements.txt` (own venv; adds `fastapi`, `uvicorn[standard]`,
+  `qrcode`); the main `requirements.txt` is unchanged. `PG_DETECTOR=none` runs without torch (no detection, frames only).
+
+**Risks / not done:** the camera server has **no login**: anyone on the Wi-Fi can view feeds (faces) and acknowledge
+alarms. One zone config (`PG_CONFIG`) for all phones. Plain HTTP needs Chrome's insecure-origin flag on each phone.
+Not yet tested with a real phone or in a real browser.
+
+### 21a. iPhone HTTPS, per-camera zone editor, generic item boxes (2026-11-24)
+
+- **iPhone:** iOS allows the camera only on HTTPS and has no insecure-origin flag. The camera server now also serves
+  HTTPS on 8443 when `server/certs/cert.pem` + `key.pem` exist (made with mkcert for the LAN IP); the public CA cert is
+  served at `/ca.crt` for installing as an iOS profile. `certs/` is git-ignored (private key). Verified with a real iPhone:
+  profile installed, PWA streamed over `wss://` (hundreds of frames processed). Vercel was considered and rejected: no
+  WebSockets/persistent state/size for torch, and an https page cannot reach a plain-http LAN server anyway.
+- **Zone editor per phone camera** (`/zones/{camera_id}`): tap corners on the latest raw frame, saved to
+  `server/zones/{camera_id}.json`, applied live via `PharmaGuardPipeline.set_zones`, loaded when that camera's pipeline is
+  created (overrides `PG_CONFIG` zones). Validation: 3-24 corners, area >= 0.2% of the image, unique names, <= 8 zones.
+- **"Every object" scan** (`ItemDetectorConfig`, `items` section; **default off**, on for phone cameras via `PG_ITEMS=1`).
+  Owner asked for shelves, chairs, mobile phones and small objects, and "every object, labelled 'object' if unnamed".
+  COCO has no shelf class, so the backend is **YOLOE prompt-free** (`yoloe-11s-seg-pf.pt`, 4,585 built-in names incl.
+  shelf, chair, smartphone, bottle, box, medicine) via `YOLOEDetector(BaseDetector)`. Measured on the dev laptop CPU
+  (640 px): YOLO-World-s 220-370 ms, YOLOE-11s-pf 350-570 ms per frame (both measured while a phone was also streaming,
+  so somewhat inflated), vs ~170 ms for yolov8n; at 960 px YOLO-World took 530-1000 ms.
+  - Runs in `AsyncObjectScanner` (background thread, newest frame only, full input resolution), never on the per-frame
+    path. Scanning flat out still cut person tracking from ~3.0 to **2.0 frames/s** (shared CPU, measured with no phone
+    connected), so `min_interval_sec` = 1.0 by default: tracking measured **2.6 / 3.0 frames/s**, object boxes refresh ~1/s.
+  - Label rule: name shown when conf >= `name_confidence` (0.45), otherwise `object` (raw name kept as `name`);
+    synonyms merged (smartphone/phone -> mobile phone, bookshelf -> shelf, office chair -> chair); people/body parts
+    dropped (pose model's job); boxes > 60% of the frame dropped (scene labels such as "martial arts gym").
+  - Small objects: `imgsz` (`PG_ITEMS_IMGSZ`, e.g. 960); the phone then uploads frames that wide (`send_width` in hello)
+    and captures at up to 1280x960. Slower; not yet measured end to end.
+  - **Uncluttered by default** (owner: "showing all the detections makes the system not user friendly"): `show` =
+    `key` draws only `key_names` (shelf, chair, mobile phone, phone/tablet, laptop, bottle, box, bag, cup, medicine);
+    the phone has an **Objects: Key / All / Off** button (remembered per phone). Every box is still sent, flagged `key`.
+    On iPhone footage a phone seen from above was labelled "tablet computer" (86%), so tablet computer -> `phone/tablet`.
+  - **Display only**: never given to the behaviour engine or alerts (unit test). Low-confidence names are unreliable
+    (bus.jpg sample: "stop sign", "trench coat" below 0.45 shown as `object`).
+- Bag boxes now carry the detector's real confidence (`overlay.bag_conf`); previously the phone output hard-coded 1.0.
+
+
+## 22. Demo Runs on the Laptop; Colab Is GPU Evidence Only (2026-11-27)
+
+**Decision (owner, after the Colab measurements below):** the 1 Dec live demo runs the **laptop camera server** with the
+**iPhone on the same Wi-Fi/hotspot** (`pharmguard-camera/server`, `python main.py`, no internet in the frame path).
+Colab is kept only as **GPU evidence** (benchmarks). Detection, behaviour and alert logic are unchanged by everything here.
+
+**Why not Colab live:** GPU compute is ~5x faster than the laptop, but from Ghana the iPhone -> Cloudflare -> Colab round
+trip, not the GPU, limits throughput. The real iPhone reached **0.5-1.1 frames/s**; at that rate a quick reach-and-conceal
+falls between frames, and in the staged try **no alarm fired**. The behaviour engine needs several consecutive frames of
+the hand in the shelf and then at the pocket/bag (§13, §20); 5 frames/s is a working minimum (an engineering
+estimate, not a measured threshold; to be checked in the staged runs).
+
+### Measurements (all measured; "compute" = server's own processing time per frame, "round trip" = send -> reply at the client)
+
+| Setup | Object scan | In flight | Delivered | Round trip p50 / p95 | Compute p50 / p95 |
+|---|---|---|---|---|---|
+| Laptop CPU, localhost (`test_client.py`, bus.jpg, 100 frames) | on | 1 | 5.2 fps | 157 / 337 ms | 143 / 323 ms |
+| Laptop CPU, localhost | on | 2 | 5.2 fps | 363 / 578 ms | 161 / 348 ms |
+| Laptop CPU, localhost | **off** | **1** | **9.4 fps** | **93 / 112 ms** | 79 / 98 ms |
+| Laptop CPU, localhost | off | 2 | 9.9 fps | 179 / 277 ms | 80 / 117 ms |
+| Colab T4 (torch 2.14.1+cu130), from inside Colab through the tunnel (M-1) | on | 1 | 21.5 fps | 45 / 53 ms | 18 / 24 ms |
+| Colab T4, M-1 | on | 2 | 30.9 fps | 57 / 96 ms | 21 / 32 ms |
+| Colab T4, M-1 | off | 1 | 20.8 fps | 45 / 59 ms | 18 / 26 ms |
+| Colab T4, M-1 | off | 2 | 27.6 fps | 70 / 84 ms | 26 / 34 ms |
+| **Real iPhone in Ghana -> Cloudflare tunnel -> Colab T4** (O2-11, 640x853 portrait) | on | 2 | **1.1 fps** (209 frames, 0 skipped) | not measured | 28.5 ms |
+| Same, second run | on | 2 | **0.5 fps** (299 frames, 0 skipped) | not measured | 19.3 ms |
+
+- Option 1 `benchmark.py` on the T4 (dashboard pipeline, 640x360, FP16): pipeline **15.4 ms**, total incl. JPEG encode
+  **17.3 ms p50** (56.6 fps compute ceiling).
+- M-1 runs from inside Google's network, so it shows the tunnel's overhead, not the internet path. M-2 (laptop -> tunnel)
+  was **not run**. The Cloudflare tunnel cell (O2-8) worked on its first real run.
+
+### Changes made for the laptop demo
+
+- **Object scan off by default** (`PG_ITEMS` default `0`, was `1`): on the laptop CPU it halved throughput (9.4 -> 5.2 fps)
+  and doubled latency. `PG_ITEMS=1` opts back in. The scan stays display only.
+- **1 frame in flight by default** (`PG_MAX_IN_FLIGHT`, default `1`, was a fixed 2): same throughput on localhost,
+  about half the latency (93 vs 179 ms p50). `PG_MAX_IN_FLIGHT=2` remains for slower networks.
+- **Too-slow warning:** below `SLOW_FPS = 5` (or no frame for > 2 s, after 10 frames of warm-up) the phone, `/monitor`
+  and the dashboard's Phone cameras tab show "too slow for reliable detection". `/api/cameras` carries `slow`; the phone
+  gets the threshold in `hello.slow_fps` and shows its live fps in a badge.
+- **Rotate hint:** the iPhone sent portrait 640x853 frames; the PWA shows "Rotate to landscape" while frames are portrait
+  (hint only; streaming continues).
+
+### Other decisions made in this round (2026-11-27)
+
+- **Rear camera by default, never mirrored.** PWA and the dashboard's fast stream request
+  `facingMode: {exact: "environment"}`, falling back to `{ideal: "environment"}` on `OverconstrainedError`/`NotFoundError`
+  (laptops). The PWA's Flip button is session-only (never saved), so every start, reload or QR scan opens the rear camera.
+  The Gradio fallback webcam uses `WebcamOptions(mirror=False, constraints={"video": {"facingMode": "environment", ...}})`
+  (Gradio 6.32 already supports this, so no re-pin). Verified in headless Chrome with fake cameras: frames reach the server
+  unmirrored (left/right colour test), laptop fallback works.
+- **Access key (`PG_ACCESS_KEY`)** on the camera server. Unset = unchanged LAN behaviour. Set = every route except the
+  static PWA shell and the public CA cert returns 401, and the WebSocket closes with 4001, unless the key arrives as
+  `?key=`, `X-PG-Key` or the HttpOnly `pg_key` cookie (set from a valid `?key=`). Constant-time compare. The QR/pair link
+  carries the key, so pairing stays one scan; the PWA stores it. The dashboard's Phone cameras tab adds it when
+  `PG_ACCESS_KEY` is in its environment. Required for any public tunnel; optional on a private hotspot.
+- **Colab Option 2** (camera server on the GPU + Cloudflare quick tunnel) is in the notebook and worked, but is not the
+  demo path (above). The SQLite DB stays on local disk and is mirrored to Drive (rule 11); zones (`PG_ZONES_DIR`), alerts
+  and weights live on Drive. O2-10 (dashboard alongside) has **not** been run on Colab and is labelled "not for the demo".
+- **Notebook install** pins torch/torchvision to the installed **distribution** versions (`importlib.metadata`), not
+  `torch.__version__`: the two differed on the dev laptop (`2.10.0+cpu` vs `2.10.0`) and pip failed with
+  ResolutionImpossible.
+
+### Remaining limits
+
+- **Latency over the internet** (any cloud path) is too high from Ghana for reliable detection; local Wi-Fi only.
+- **Privacy:** on Colab, frames pass through Cloudflare (Option 2) or Gradio's share relay (Option 1). Staged, consenting
+  participants only. Anyone with the keyed link sees the cameras.
+- **Free Colab** can disconnect idle sessions or stop web UIs; it is not relied on for the demo.
+- **Laptop CPU ceiling ~9-10 fps** with the scan off (one phone); a second phone splits it.
+- **False-alert / miss rates on staged footage are still unmeasured** (P3-1).

@@ -1,5 +1,7 @@
 # 🛡️ PharmaGuard — AI Pharmacy Security Monitor
 
+> **1 Dec demo:** iPhone + laptop camera server on the same Wi-Fi. Step-by-step: [`docs/RUN_GUIDE.md`](docs/RUN_GUIDE.md).
+
 > Real-time suspicious-interaction monitoring system designed for pharmacies. Captures live webcam feeds, tracks individuals with persistent IDs, monitors sensitive medicine shelves, flags suspicious behavioral sequences, and presents actionable telemetry to security staff.
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)

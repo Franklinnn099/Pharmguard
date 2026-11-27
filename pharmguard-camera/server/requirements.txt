@@ -1,0 +1,16 @@
+# PharmGuard phone-camera server.
+# Base: web server, pairing QR, JPEG decode/encode.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+qrcode>=7.4
+numpy>=1.26,<2.3
+opencv-python>=4.8
+
+# PharmGuard pipeline (../../pharmaguard). Pinned to match the main repo's requirements.txt.
+# If torch/ultralytics fail to install, install only the base lines above and run with PG_DETECTOR=none.
+ultralytics==8.4.215
+torch>=2.0.0
+torchvision>=0.15.0
+scipy>=1.11
+pydantic>=2.5,<3
+PyYAML>=6.0

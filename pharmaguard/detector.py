@@ -211,3 +211,32 @@ class YOLODetector(BaseDetector):
             "iou_threshold": self.config.iou_threshold,
             "target_classes": self.config.target_classes,
         }
+
+
+class YOLOEDetector(YOLODetector):
+    """Open-vocabulary YOLOE detector (Ultralytics). With prompt-free weights (``*-pf.pt``) it reports any of its
+    ~4,585 built-in category names, which is what the operator's "every object" display needs. Same output format
+    as ``YOLODetector``; ``target_classes`` is ignored (None = everything)."""
+
+    def _load_model(self) -> None:
+        from ultralytics import YOLOE
+        self.model = YOLOE(self.config.model_name)
+        self.model.to(self.device)
+        self.half = bool(self.config.half_precision and self.device.startswith("cuda"))
+        self._precision_kwargs = self._resolve_precision_kwargs(self.half)
+        self.detect(np.zeros((480, 640, 3), dtype=np.uint8))   # warm-up, as in YOLODetector
+
+    def get_model_info(self) -> Dict[str, Any]:
+        info = super().get_model_info()
+        info["vocabulary_size"] = len(getattr(self.model, "names", {}) or {})
+        return info
+
+
+def make_item_detector(items_cfg: Any, device: str = "auto", half_precision: bool = False) -> BaseDetector:
+    """Build the display-only object detector described by an ``ItemDetectorConfig``."""
+    cfg = DetectorConfig(model_name=items_cfg.model_name, confidence_threshold=items_cfg.confidence_threshold,
+                         target_classes=items_cfg.target_classes, device=device, imgsz=items_cfg.imgsz,
+                         half_precision=half_precision, dedupe_poses=False)
+    if "yoloe" in str(items_cfg.model_name).lower():
+        return YOLOEDetector(cfg)
+    return YOLODetector(cfg)

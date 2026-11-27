@@ -1,0 +1,5 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+qrcode>=7.4
+numpy>=1.26,<2.3
+opencv-python>=4.8

@@ -53,9 +53,9 @@ class DetectorConfig(BaseModel):
                     "have different skeletons and are kept.")
     dedupe_kp_dist: float = Field(default=0.08, gt=0.0, le=1.0)
     dedupe_min_shared: int = Field(default=3, ge=1, le=17)
-    target_classes: List[int] = Field(
+    target_classes: Optional[List[int]] = Field(
         default_factory=lambda: [0],
-        description="Class 0 in COCO corresponds to 'person'."
+        description="Class 0 in COCO corresponds to 'person'. None = every class (display-only object scan)."
     )
     device: str = Field(
         default="auto",
@@ -124,6 +124,52 @@ class ObjectDetectorConfig(BaseModel):
         description="Only run while a hand is at / has just left a shelf (when bag positions can affect the "
                     "score). Saves ~100 ms every Nth frame on CPU. False = run continuously (also reports "
                     "informational 'hand at own bag' events with no shelf contact).")
+
+
+class ItemDetectorConfig(BaseModel):
+    """Open-vocabulary object scan for the operator display ("every object"). DISPLAY ONLY: item boxes never reach
+    the behaviour engine or alerts.
+
+    Default backend is YOLOE prompt-free (``*-pf.pt``, ~4,585 built-in category names). It is too slow on CPU to run
+    on every frame (measured 350-570 ms at 640 px on the dev laptop), so it runs in a background thread on the newest
+    frame and its boxes refresh as fast as the model allows, without slowing person tracking. A plain YOLO model
+    (e.g. yolov8n.pt) can be used instead, restricted to ``target_classes``.
+    """
+    enabled: bool = False
+    model_name: str = "yoloe-11s-seg-pf.pt"
+    target_classes: Optional[List[int]] = Field(default=None,
+        description="Only for plain YOLO models; None = every class the model knows.")
+    confidence_threshold: float = Field(default=0.20, ge=0.05, le=1.0, description="Box shown at/above this.")
+    name_confidence: float = Field(default=0.45, ge=0.05, le=1.0,
+        description="Below this the box is labelled 'object' (open-vocabulary names are unreliable when unsure).")
+    imgsz: int = Field(default=640, ge=320, le=1920,
+        description="Scan resolution. Higher finds smaller objects but is slower (960 measured ~2-3x slower on CPU).")
+    max_box_area: float = Field(default=0.6, gt=0.0, le=1.0,
+        description="Drop boxes covering more than this fraction of the frame (scene labels like 'room', 'gym').")
+    max_items: int = Field(default=40, ge=1)
+    min_interval_sec: float = Field(default=1.0, ge=0.0,
+        description="At most one scan per this many seconds. The scan shares the CPU with person tracking; measured "
+                    "on the dev laptop CPU, scanning continuously cut tracking from ~3.0 to ~2.0 frames/s. 0 = no limit.")
+    exclude_names: List[str] = Field(default_factory=lambda: [
+        "person", "man", "woman", "boy", "girl", "child", "baby", "people", "human face", "face", "human head",
+        "head", "human body", "human hand", "hand", "human arm", "arm", "leg", "human leg", "human hair", "hair"],
+        description="People and body parts are handled by the pose model.")
+    aliases: Dict[str, str] = Field(default_factory=lambda: {
+        "smartphone": "mobile phone", "phone": "mobile phone", "cell phone": "mobile phone",
+        "mobile phone": "mobile phone", "telephone": "mobile phone",
+        # Measured on iPhone footage: a phone seen from above was called "tablet computer" at 86% confidence.
+        "tablet computer": "phone/tablet", "tablet": "phone/tablet",
+        "bookshelf": "shelf", "shelves": "shelf",
+        "office chair": "chair", "armchair": "chair", "folding chair": "chair",
+        "handbag": "bag", "backpack": "bag", "plastic bag": "bag", "cardboard box": "box",
+        "water bottle": "bottle", "pill bottle": "bottle", "coffee cup": "cup", "mug": "cup"},
+        description="Merge synonyms into one display name.")
+    show: str = Field(default="key", pattern="^(key|all|off)$",
+        description="What the operator sees: 'key' = only key_names (uncluttered), 'all' = every box incl. 'object', "
+                    "'off' = none. Clients may switch locally; every scanned box is still sent with a 'key' flag.")
+    key_names: List[str] = Field(default_factory=lambda: [
+        "shelf", "chair", "mobile phone", "phone/tablet", "laptop", "bottle", "box", "bag", "cup", "medicine"],
+        description="Display labels shown in 'key' mode.")
 
 
 class BehaviorConfig(BaseModel):
@@ -292,6 +338,7 @@ class PharmaGuardConfig(BaseModel):
     tracker: TrackerConfig = Field(default_factory=TrackerConfig)
     zones: List[ShelfZone] = Field(default_factory=lambda: [ShelfZone()])
     objects: ObjectDetectorConfig = Field(default_factory=ObjectDetectorConfig)
+    items: ItemDetectorConfig = Field(default_factory=ItemDetectorConfig)
     behavior: BehaviorConfig = Field(default_factory=BehaviorConfig)
     alert: AlertConfig = Field(default_factory=AlertConfig)
     display: DisplayConfig = Field(default_factory=DisplayConfig)
