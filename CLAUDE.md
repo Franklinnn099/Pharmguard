@@ -27,6 +27,7 @@ pharmguard/
 ├── benchmark.py                    # Server-side compute benchmark (incl. return-frame encode)
 ├── docs/AUDIT_2026-11-19.md        # Takeover audit: verified defects, measurements, risks
 ├── docs/DEMO_STAGING.md            # Camera placement, zone setup, staged scenario protocol
+├── docs/RUN_GUIDE.md               # 1 Dec demo run guide (laptop camera server + iPhone); Colab = GPU evidence
 ├── configs/demo_shelf.yaml         # Demo zones/thresholds (pass with --config)
 ├── tools/e2e_benchmark.py          # Browser-equivalent HTTP round-trip benchmark (run from laptop)
 ├── tools/track_video.py            # Run pipeline on recorded video (video time); tracking report + annotated MP4
@@ -80,6 +81,7 @@ pharmguard/
     ├── test_stream_pipeline.py     # Telemetry, downscale, real-image inference, HTTP round trip
     ├── test_fast_stream.py         # Fast stream ordering, login, real server round trip
     ├── test_phone_cameras.py       # Phone-camera server: WS protocol, routes, per-camera real pipeline, dashboard tab
+    ├── test_colab_notebook.py      # Static checks on the Colab notebook (Option 1 fixes, Option 2 cells)
     └── conftest.py                 # Redirects alert log so tests never touch logs/
 ```
 

@@ -640,3 +640,77 @@ Not yet tested with a real phone or in a real browser.
   - **Display only**: never given to the behaviour engine or alerts (unit test). Low-confidence names are unreliable
     (bus.jpg sample: "stop sign", "trench coat" below 0.45 shown as `object`).
 - Bag boxes now carry the detector's real confidence (`overlay.bag_conf`); previously the phone output hard-coded 1.0.
+
+
+## 22. Demo Runs on the Laptop; Colab Is GPU Evidence Only (2026-11-27)
+
+**Decision (owner, after the Colab measurements below):** the 1 Dec live demo runs the **laptop camera server** with the
+**iPhone on the same Wi-Fi/hotspot** (`pharmguard-camera/server`, `python main.py`, no internet in the frame path).
+Colab is kept only as **GPU evidence** (benchmarks). Detection, behaviour and alert logic are unchanged by everything here.
+
+**Why not Colab live:** GPU compute is ~5x faster than the laptop, but from Ghana the iPhone -> Cloudflare -> Colab round
+trip, not the GPU, limits throughput. The real iPhone reached **0.5-1.1 frames/s**; at that rate a quick reach-and-conceal
+falls between frames, and in the staged try **no alarm fired**. The behaviour engine needs several consecutive frames of
+the hand in the shelf and then at the pocket/bag (§13, §20); 5 frames/s is a working minimum (an engineering
+estimate, not a measured threshold; to be checked in the staged runs).
+
+### Measurements (all measured; "compute" = server's own processing time per frame, "round trip" = send -> reply at the client)
+
+| Setup | Object scan | In flight | Delivered | Round trip p50 / p95 | Compute p50 / p95 |
+|---|---|---|---|---|---|
+| Laptop CPU, localhost (`test_client.py`, bus.jpg, 100 frames) | on | 1 | 5.2 fps | 157 / 337 ms | 143 / 323 ms |
+| Laptop CPU, localhost | on | 2 | 5.2 fps | 363 / 578 ms | 161 / 348 ms |
+| Laptop CPU, localhost | **off** | **1** | **9.4 fps** | **93 / 112 ms** | 79 / 98 ms |
+| Laptop CPU, localhost | off | 2 | 9.9 fps | 179 / 277 ms | 80 / 117 ms |
+| Colab T4 (torch 2.14.1+cu130), from inside Colab through the tunnel (M-1) | on | 1 | 21.5 fps | 45 / 53 ms | 18 / 24 ms |
+| Colab T4, M-1 | on | 2 | 30.9 fps | 57 / 96 ms | 21 / 32 ms |
+| Colab T4, M-1 | off | 1 | 20.8 fps | 45 / 59 ms | 18 / 26 ms |
+| Colab T4, M-1 | off | 2 | 27.6 fps | 70 / 84 ms | 26 / 34 ms |
+| **Real iPhone in Ghana -> Cloudflare tunnel -> Colab T4** (O2-11, 640x853 portrait) | on | 2 | **1.1 fps** (209 frames, 0 skipped) | not measured | 28.5 ms |
+| Same, second run | on | 2 | **0.5 fps** (299 frames, 0 skipped) | not measured | 19.3 ms |
+
+- Option 1 `benchmark.py` on the T4 (dashboard pipeline, 640x360, FP16): pipeline **15.4 ms**, total incl. JPEG encode
+  **17.3 ms p50** (56.6 fps compute ceiling).
+- M-1 runs from inside Google's network, so it shows the tunnel's overhead, not the internet path. M-2 (laptop -> tunnel)
+  was **not run**. The Cloudflare tunnel cell (O2-8) worked on its first real run.
+
+### Changes made for the laptop demo
+
+- **Object scan off by default** (`PG_ITEMS` default `0`, was `1`): on the laptop CPU it halved throughput (9.4 -> 5.2 fps)
+  and doubled latency. `PG_ITEMS=1` opts back in. The scan stays display only.
+- **1 frame in flight by default** (`PG_MAX_IN_FLIGHT`, default `1`, was a fixed 2): same throughput on localhost,
+  about half the latency (93 vs 179 ms p50). `PG_MAX_IN_FLIGHT=2` remains for slower networks.
+- **Too-slow warning:** below `SLOW_FPS = 5` (or no frame for > 2 s, after 10 frames of warm-up) the phone, `/monitor`
+  and the dashboard's Phone cameras tab show "too slow for reliable detection". `/api/cameras` carries `slow`; the phone
+  gets the threshold in `hello.slow_fps` and shows its live fps in a badge.
+- **Rotate hint:** the iPhone sent portrait 640x853 frames; the PWA shows "Rotate to landscape" while frames are portrait
+  (hint only; streaming continues).
+
+### Other decisions made in this round (2026-11-27)
+
+- **Rear camera by default, never mirrored.** PWA and the dashboard's fast stream request
+  `facingMode: {exact: "environment"}`, falling back to `{ideal: "environment"}` on `OverconstrainedError`/`NotFoundError`
+  (laptops). The PWA's Flip button is session-only (never saved), so every start, reload or QR scan opens the rear camera.
+  The Gradio fallback webcam uses `WebcamOptions(mirror=False, constraints={"video": {"facingMode": "environment", ...}})`
+  (Gradio 6.32 already supports this, so no re-pin). Verified in headless Chrome with fake cameras: frames reach the server
+  unmirrored (left/right colour test), laptop fallback works.
+- **Access key (`PG_ACCESS_KEY`)** on the camera server. Unset = unchanged LAN behaviour. Set = every route except the
+  static PWA shell and the public CA cert returns 401, and the WebSocket closes with 4001, unless the key arrives as
+  `?key=`, `X-PG-Key` or the HttpOnly `pg_key` cookie (set from a valid `?key=`). Constant-time compare. The QR/pair link
+  carries the key, so pairing stays one scan; the PWA stores it. The dashboard's Phone cameras tab adds it when
+  `PG_ACCESS_KEY` is in its environment. Required for any public tunnel; optional on a private hotspot.
+- **Colab Option 2** (camera server on the GPU + Cloudflare quick tunnel) is in the notebook and worked, but is not the
+  demo path (above). The SQLite DB stays on local disk and is mirrored to Drive (rule 11); zones (`PG_ZONES_DIR`), alerts
+  and weights live on Drive. O2-10 (dashboard alongside) has **not** been run on Colab and is labelled "not for the demo".
+- **Notebook install** pins torch/torchvision to the installed **distribution** versions (`importlib.metadata`), not
+  `torch.__version__`: the two differed on the dev laptop (`2.10.0+cpu` vs `2.10.0`) and pip failed with
+  ResolutionImpossible.
+
+### Remaining limits
+
+- **Latency over the internet** (any cloud path) is too high from Ghana for reliable detection; local Wi-Fi only.
+- **Privacy:** on Colab, frames pass through Cloudflare (Option 2) or Gradio's share relay (Option 1). Staged, consenting
+  participants only. Anyone with the keyed link sees the cameras.
+- **Free Colab** can disconnect idle sessions or stop web UIs; it is not relied on for the demo.
+- **Laptop CPU ceiling ~9-10 fps** with the scan off (one phone); a second phone splits it.
+- **False-alert / miss rates on staged footage are still unmeasured** (P3-1).
