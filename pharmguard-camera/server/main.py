@@ -74,7 +74,9 @@ ACCESS_KEY = os.environ.get("PG_ACCESS_KEY", "").strip()
 # Static PWA shell: no camera data, and the manifest is fetched without cookies, so it stays public.
 PUBLIC_PATHS = {"/", "/index.html", "/app.js", "/sw.js", "/manifest.webmanifest", "/icon.svg", "/ca.crt"}
 MAX_FRAME_BYTES = 4 * 1024 * 1024
-MAX_IN_FLIGHT = 2
+# Frames a phone may have on the wire. 1 = lowest latency on the laptop CPU (measured: p50 93 ms at 1 vs 179 ms
+# at 2, same throughput). PG_MAX_IN_FLIGHT=2 can help over a slow network.
+MAX_IN_FLIGHT = max(1, int(os.environ.get("PG_MAX_IN_FLIGHT", "1")))
 VIEW_JPEG_QUALITY = 75
 CAM_RE = re.compile(r"[^A-Za-z0-9_-]")
 
@@ -491,7 +493,8 @@ def print_banner(cam: str = "phone1") -> None:
     print("\n" + "=" * 64)
     print(" PharmGuard camera server")
     print(f"   Detector:   {bridge.mode}  ({bridge.model_name})")
-    print(f"   Objects:    {bridge.items_model}  (display only; PG_ITEMS=0 off, PG_ITEMS_IMGSZ=960 smaller objects)")
+    print(f"   Objects:    {bridge.items_model}  (display only; off by default, PG_ITEMS=1 turns it on)")
+    print(f"   In flight:  {MAX_IN_FLIGHT} frame(s) per phone (PG_MAX_IN_FLIGHT)")
     print(f"   LAN IP:     {lan_ip()}")
     print(f"   Phone URL:  {url}")
     print(f"   Pair page:  {base_url()}/pair{key_query()}     Monitor: {base_url()}/monitor{key_query()}")

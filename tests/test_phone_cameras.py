@@ -456,3 +456,19 @@ def test_yoloe_detector_finds_named_objects_on_real_image():
     objs = postprocess(det.detect(img), img.shape[1], img.shape[0], cfg)
     assert objs and all(o.raw_name not in ("person", "man", "woman") for o in objs)
     assert all(0.0 <= v <= 1.0 for o in objs for v in o.box)
+
+
+def test_laptop_demo_defaults_scan_off_one_in_flight(monkeypatch):
+    """Measured on the laptop CPU: the object scan halves frames/s and 2 in flight doubles latency."""
+    monkeypatch.delenv("PG_ITEMS", raising=False)
+    monkeypatch.delenv("PG_MAX_IN_FLIGHT", raising=False)
+    srv = _load_server(monkeypatch, "none")
+    assert srv.bridge._make_config("c").items.enabled is False
+    with TestClient(srv.app).websocket_connect("/ws/camera?cam=c") as ws:
+        assert ws.receive_json()["max_in_flight"] == 1
+    monkeypatch.setenv("PG_ITEMS", "1")                     # opt in
+    monkeypatch.setenv("PG_MAX_IN_FLIGHT", "2")
+    srv = _load_server(monkeypatch, "none")
+    assert srv.bridge._make_config("c").items.enabled is True
+    with TestClient(srv.app).websocket_connect("/ws/camera?cam=c") as ws:
+        assert ws.receive_json()["max_in_flight"] == 2

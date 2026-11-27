@@ -164,8 +164,9 @@ class PharmaGuardBridge:
             cfg.zones = [ShelfZone(**z) for z in saved]
         if os.environ.get("PG_NO_RECORDING") == "1":
             cfg.recording.enabled = False
-        # "Every object" scan (YOLOE prompt-free), display only. On by default for phone cameras; PG_ITEMS=0 = off.
-        cfg.items.enabled = os.environ.get("PG_ITEMS", "1") != "0"
+        # "Every object" scan (YOLOE prompt-free), display only. OFF by default: on the laptop CPU it halved
+        # throughput (9.4 -> 5.2 frames/s) and doubled latency (measured 2026-11-27). PG_ITEMS=1 = opt in.
+        cfg.items.enabled = os.environ.get("PG_ITEMS", "0") == "1"
         if os.environ.get("PG_ITEMS_IMGSZ"):
             cfg.items.imgsz = int(os.environ["PG_ITEMS_IMGSZ"])     # e.g. 960 for smaller objects (slower)
         if os.environ.get("PG_ITEMS_INTERVAL"):

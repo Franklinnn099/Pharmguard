@@ -26,7 +26,7 @@
   syncZonesLink();
   camInput.addEventListener('input', syncZonesLink);
 
-  let stream = null, ws = null, running = false, inFlight = 0, maxInFlight = 2;
+  let stream = null, ws = null, running = false, inFlight = 0, maxInFlight = 1;
   // Object boxes: 'key' = people + key objects only (default, uncluttered), 'all' = every box, 'off' = people only.
   const OBJ_MODES = ['key', 'all', 'off'], OBJ_TEXT = { key: 'Objects: Key', all: 'Objects: All', off: 'Objects: Off' };
   const objBtn = $('objs');
@@ -157,7 +157,7 @@
     ws.onmessage = (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === 'hello') { detector = m.detector; maxInFlight = m.max_in_flight || 2; sendWidth = m.send_width || 640;
+      if (m.type === 'hello') { detector = m.detector; maxInFlight = m.max_in_flight || 1; sendWidth = m.send_width || 640;
         if (!store.get('pg-objects') && OBJ_MODES.includes(m.objects_show)) setObjMode(m.objects_show);
         pump(); return; }
       if (m.type === 'detections' || m.type === 'skipped') {

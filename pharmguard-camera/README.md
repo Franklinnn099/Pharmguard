@@ -57,7 +57,8 @@ Optional dashboard alongside it (from the repo root, in a second terminal): `pyt
 | `PG_DETECTOR` | `pharmaguard` | `pharmaguard` = full pipeline; `none` = no inference (frames shown, detections `[]`). Falls back to `none` with an error log if torch/ultralytics are missing |
 | `PG_CONFIG` | — | PharmaGuard YAML (zones, thresholds), e.g. `..\..\configs\demo_shelf.yaml`. Applies to every phone |
 | `PG_CAM` | `phone1` | Camera name encoded in the terminal QR |
-| `PG_ITEMS` | `1` | "Every object" scan (YOLOE prompt-free, `yoloe-11s-seg-pf.pt`, downloaded on first run): shelves, chairs, phones, bottles…; unsure detections labelled `object`. **Display only** — never affects alerts. `0` = off |
+| `PG_ITEMS` | `0` | `1` = turn on the "every object" scan (YOLOE prompt-free, `yoloe-11s-seg-pf.pt`, downloaded on first run): shelves, chairs, phones, bottles…; unsure detections labelled `object`. **Display only** — never affects alerts. Off by default: on the laptop CPU it halves frames/s (9.4 → 5.2) and doubles latency |
+| `PG_MAX_IN_FLIGHT` | `1` | Frames each phone keeps on the wire. 1 = lowest latency on the laptop; 2 may help over a slow network |
 | `PG_ITEMS_SHOW` | `key` | Default object view: `key` = only shelf, chair, mobile phone, laptop, bottle, box, bag, cup, medicine; `all` = every box incl. `object`; `off`. The phone's **Objects** button switches it per phone |
 | `PG_ITEMS_INTERVAL` | `1.0` | Seconds between object scans (it shares the CPU with person tracking). `0` = as fast as possible |
 | `PG_ITEMS_IMGSZ` | `640` | Scan resolution; `960`/`1280` finds smaller objects (slower; the phone then sends larger frames) |
@@ -116,7 +117,7 @@ stream and the first one is told to pick another name.
 
 | Direction | Message |
 |---|---|
-| server → phone | `{"type":"hello","camera_id","detector","model","max_in_flight":2}` once on connect |
+| server → phone | `{"type":"hello","camera_id","detector","model","max_in_flight":1}` once on connect |
 | phone → server | binary message = one JPEG frame. Frames are numbered 1, 2, 3… in send order |
 | server → phone | `{"type":"detections","frame":n,"detections":[...],"w","h","ms","alarm"}` |
 | server → phone | `{"type":"skipped","frame":n}` — a newer frame arrived before frame *n* was processed |
