@@ -75,6 +75,29 @@
     } catch { /* next reply shows the real state */ }
   };
 
+  // Rear camera by default. 'facing' is session-only and never saved, so every Start (QR scan, reload)
+  // opens the rear camera; the Flip button switches for the current session only.
+  let facing = 'environment';
+  const flipBtn = $('flip');
+  async function openCamera(want) {
+    const cons = (f) => ({ facingMode: f, width: { ideal: 1280 }, height: { ideal: 960 } });
+    try {
+      return await navigator.mediaDevices.getUserMedia({ audio: false, video: cons({ exact: want }) });
+    } catch (e) {   // no camera facing that way (e.g. a laptop): take whatever is closest
+      if (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError') throw e;
+      return navigator.mediaDevices.getUserMedia({ audio: false, video: cons({ ideal: want }) });
+    }
+  }
+  flipBtn.onclick = async () => {
+    if (!running) return;
+    const want = facing === 'environment' ? 'user' : 'environment';
+    try {
+      const s = await openCamera(want);
+      stream.getTracks().forEach((t) => t.stop());
+      stream = s; facing = want; video.srcObject = s; await video.play().catch(() => {});
+    } catch (e) { showError('Could not switch camera (' + e.name + ').'); }
+  };
+
   async function requestWakeLock() {
     try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch { wakeLock = null; }
   }
@@ -91,8 +114,8 @@
       return;
     }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } } });
+      facing = 'environment';
+      stream = await openCamera(facing);
       // Captured larger than sent: each frame is shrunk to the server's send_width before upload.
     } catch (e) {
       showError('Could not open the camera (' + e.name + '). Allow camera access for this site.');
@@ -101,6 +124,7 @@
     video.srcObject = stream;
     await video.play().catch(() => {});
     running = true; btn.textContent = 'Stop'; btn.classList.add('stop'); camInput.disabled = true;
+    flipBtn.style.display = 'inline-block';
     await requestWakeLock();
     connect(cam);
     requestAnimationFrame(draw);
@@ -113,6 +137,7 @@
     try { if (wakeLock) wakeLock.release(); } catch { /* already released */ }
     wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none'; onAlarm('IDLE', false, 0);
     btn.textContent = 'Start'; btn.classList.remove('stop'); camInput.disabled = false;
+    flipBtn.style.display = 'none';
     ctx.clearRect(0, 0, ov.width, ov.height); setStatus('Stopped');
   }
 

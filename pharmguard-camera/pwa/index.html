@@ -10,7 +10,7 @@
   :root{color-scheme:dark}
   html,body{margin:0;height:100%;background:#000;color:#e2e8f0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
   #stage{position:fixed;inset:0}
-  video,canvas#ov{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+  video,canvas#ov{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;transform:none}  /* never mirrored */
   #bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;
        padding:10px 16px calc(10px + env(safe-area-inset-bottom));background:rgba(11,15,23,.85);backdrop-filter:blur(6px)}
   input{width:7.5em;background:#111827;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:8px;font-size:15px}
@@ -31,6 +31,7 @@
 <div id="bar">
   <input id="cam" aria-label="Camera name" maxlength="32" placeholder="camera name">
   <button id="go">Start</button>
+  <button id="flip" class="sec" style="display:none" aria-label="Switch between rear and front camera">Flip camera</button>
   <button id="objs" class="sec" aria-label="Which objects to show">Objects: Key</button>
   <button id="alarm" class="stop" style="display:none">Acknowledge</button>
   <a id="zones" class="btn" href="/zones/phone1">Zones</a>
