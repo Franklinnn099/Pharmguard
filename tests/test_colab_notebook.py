@@ -88,3 +88,9 @@ def test_option2_keeps_safety_rules():
     assert "secrets.token_urlsafe" in joined                                # random key per session
     assert "key={K}" in joined                                              # links carry the key
     assert "PG_CORS_ORIGINS" in joined and "DASHBOARD_URL" in joined
+
+
+def test_section8_has_the_iphone_steps():
+    md = _cell("## 8. Launch PharmaGuard Security Console")
+    for step in ("Safari", "Log in", "Allow", "REAR", "not mirrored", "Auto-Lock → Never", "foreground"):
+        assert step in md, step
