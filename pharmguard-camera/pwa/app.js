@@ -37,6 +37,7 @@
   const shown = (d) => d.kind !== 'item' || (objMode === 'all') || (objMode === 'key' && d.key);
   let dets = [], fpsTimes = [], lastMs = 0, detector = '', wakeLock = null, retry = 0;
   const grab = document.createElement('canvas');
+  const rotateHint = $('rotate');
 
   const setStatus = (html) => { statusEl.innerHTML = html; };
   const showError = (html) => { errBox.innerHTML = html; errBox.style.display = html ? 'block' : 'none'; };
@@ -141,7 +142,8 @@
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     try { if (wakeLock) wakeLock.release(); } catch { /* already released */ }
-    wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none'; onAlarm('IDLE', false, 0);
+    wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none'; rotateHint.style.display = 'none';
+    onAlarm('IDLE', false, 0);
     btn.textContent = 'Start'; btn.classList.remove('stop'); camInput.disabled = false;
     flipBtn.style.display = 'none';
     ctx.clearRect(0, 0, ov.width, ov.height); setStatus('Stopped');
@@ -217,6 +219,8 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const vw = video.videoWidth, vh = video.videoHeight;
+    // Portrait frames (phone upright) cut the shelf's width; hint only, streaming continues.
+    rotateHint.style.display = vw && vh > vw ? 'block' : 'none';
     if (vw && vh) {
       // Boxes are normalized [0,1]; map them onto the letterboxed (object-fit: contain) video.
       const s = Math.min(W / vw, H / vh), dw = vw * s, dh = vh * s, ox = (W - dw) / 2, oy = (H - dh) / 2;
