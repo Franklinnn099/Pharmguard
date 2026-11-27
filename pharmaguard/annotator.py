@@ -4,7 +4,7 @@ Renders professional security overlays, shelf ROI boundaries, person bounding bo
 tracking traces, dwell badges, and security status HUD.
 """
 
-from typing import Callable, List, Dict, Tuple, Optional
+from typing import Any, Callable, List, Dict, Tuple, Optional
 import numpy as np
 import cv2
 
@@ -70,6 +70,18 @@ class SecurityAnnotator:
             cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 60, 200), 1, lineType=cv2.LINE_AA)
             cv2.putText(frame, "bag", (x1 + 3, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                         (200, 60, 200), 1, lineType=cv2.LINE_AA)
+        return frame
+
+    def draw_items(self, frame: np.ndarray, items: List[Any]) -> np.ndarray:
+        """Display-only scanned objects (normalized boxes): thin teal boxes with label and confidence."""
+        if not self.config.show_boxes:
+            return frame
+        h, w = frame.shape[:2]
+        for o in items:
+            x1, y1, x2, y2 = int(o.box[0] * w), int(o.box[1] * h), int(o.box[2] * w), int(o.box[3] * h)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (200, 200, 40), 1, lineType=cv2.LINE_AA)
+            cv2.putText(frame, f"{o.label} {o.conf:.0%}", (x1 + 3, max(12, y1 - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                        (200, 200, 40), 1, lineType=cv2.LINE_AA)
         return frame
 
     def draw_tracked_persons(self, frame: np.ndarray, tracking_result: TrackingResult,

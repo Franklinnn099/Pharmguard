@@ -89,7 +89,7 @@ PHONE_CAMERAS_HEAD = """
         (c.connected ? 'live' : 'offline') + '</span><span>' + c.fps + ' fps · ' + c.persons + ' person(s)' +
         (c.flagged ? ' · <span class="pg-badge rv">' + c.flagged + ' for staff review</span>' : '') +
         (st !== 'IDLE' ? ' · <span class="pg-badge ' + (st === 'ACTIVE' ? 'al' : 'rv') + '">' + esc(st) + '</span>' : '') +
-        btns + '</span>';
+        btns + ' · <a target="_blank" href="' + server + '/zones/' + encodeURIComponent(c.camera_id) + '">Zones</a></span>';
     }
     for (const k of Object.keys(tiles)) if (!seen.has(k)) { tiles[k].remove(); delete tiles[k]; }
     root.querySelector('.pg-phone-empty').style.display = j.cameras.length ? 'none' : 'block';
