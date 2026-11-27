@@ -3,6 +3,7 @@ Pretend to be a phone: send JPEG frames to /ws/camera and check that one reply c
 
     python test_client.py                          # 10 frames to ws://127.0.0.1:8000, camera "testcam"
     python test_client.py --url ws://192.168.1.20:8000 --frames 30 --cam bench
+    python test_client.py --url wss://192.168.1.20:8443 --cafile certs/ca.crt     # HTTPS port (iPhone path)
 
 Frames are Ultralytics' bus.jpg sample (real people, so the pipeline has something to detect) when
 ultralytics is installed, otherwise a synthetic image. Exits non-zero if any frame got no reply.
@@ -38,10 +39,14 @@ def sample_jpeg() -> bytes:
     return cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])[1].tobytes()
 
 
-async def run(url: str, cam: str, frames: int, in_flight: int) -> int:
+async def run(url: str, cam: str, frames: int, in_flight: int, cafile: str | None = None) -> int:
     jpeg = sample_jpeg()
     replies: dict[int, dict] = {}
-    async with websockets.connect(f"{url}/ws/camera?cam={cam}", max_size=8 * 1024 * 1024) as ws:
+    ssl_ctx = None
+    if url.startswith("wss://"):
+        import ssl
+        ssl_ctx = ssl.create_default_context(cafile=cafile)
+    async with websockets.connect(f"{url}/ws/camera?cam={cam}", max_size=8 * 1024 * 1024, ssl=ssl_ctx) as ws:
         hello = json.loads(await ws.recv())
         print(f"hello: {hello}")
         assert hello["type"] == "hello", hello
@@ -83,8 +88,9 @@ def main() -> None:
     ap.add_argument("--cam", default="testcam")
     ap.add_argument("--frames", type=int, default=10)
     ap.add_argument("--in-flight", type=int, default=2)
+    ap.add_argument("--cafile", default=None, help="CA certificate to trust for wss:// (e.g. certs/ca.crt)")
     a = ap.parse_args()
-    sys.exit(asyncio.run(run(a.url.rstrip("/"), a.cam, a.frames, a.in_flight)))
+    sys.exit(asyncio.run(run(a.url.rstrip("/"), a.cam, a.frames, a.in_flight, a.cafile)))
 
 
 if __name__ == "__main__":

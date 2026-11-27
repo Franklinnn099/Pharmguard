@@ -106,7 +106,7 @@ def test_view_stream_serves_latest_frame_as_mjpeg(monkeypatch):
     assert part.startswith(b"--frame\r\nContent-Type: image/jpeg") and st.jpeg in part
 
 
-def test_real_pipeline_per_camera_state_and_return_format(monkeypatch):
+def test_real_pipeline_per_camera_state_and_return_format(monkeypatch, tmp_path):
     """Phone frames go through the real PharmaGuard pipeline; each camera has its own tracker, one shared model."""
     pytest.importorskip("ultralytics")
     monkeypatch.setenv("PG_NO_RECORDING", "1")
@@ -135,7 +135,60 @@ def test_real_pipeline_per_camera_state_and_return_format(monkeypatch):
     assert pa.config.recording.camera_id == "cam_a"
     assert bridge.alarm_snapshot("cam_a")["state"] == "IDLE"
     assert bridge.alarm_snapshot("unknown") is None
+
+    # Zone editor: applied live to that camera only, and loaded by a camera's pipeline when it is created.
+    monkeypatch.setattr(pg_bridge, "ZONES_DIR", tmp_path)
+    box = [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]]
+    bridge.set_zones("cam_a", [{"name": "Phone_Shelf", "polygon_normalized": box}])
+    assert [z.name for z in pa.config.zones] == ["Phone_Shelf"]
+    assert [z.name for z in pa.behavior_analyzer.zones] == ["Phone_Shelf"]
+    assert [z.name for z in pb.config.zones] != ["Phone_Shelf"]
+    bridge.process("cam_a", rgb)                                   # next frame runs with the new zone
+    assert bridge.raw_frame("cam_a") is not None and bridge.raw_frame("cam_a").shape[2] == 3
+    bridge.set_zones("cam_c", [{"name": "Saved_First", "polygon_normalized": box}])
+    assert [z.name for z in bridge.pipeline_for("cam_c").config.zones] == ["Saved_First"]
+    bridge.reset_zones("cam_a")
+    assert [z.name for z in pa.config.zones] != ["Phone_Shelf"]
     bridge.close()
+
+
+def test_phone_ws_reports_sounding_alarm_once_and_phone_can_acknowledge(monkeypatch, tmp_path):
+    """Scripted shelf->bag sequence sent as phone frames over /ws/camera: the replies carry the alarm sounding
+    (one incident -> one sound_seq) and the phone's Acknowledge route silences it."""
+    from behavior_scenarios import Actor, FPS
+    from test_live_streaming_integration import FixedBagDetector, ScriptedPoseDetector
+    from pharmaguard.config import PharmaGuardConfig
+    from pharmaguard.pipeline import PharmaGuardPipeline
+
+    srv = _load_server(monkeypatch, "none")
+    actor = Actor(1, 320, [(1.0, "rest", None), (1.5, "reach_R", None), (0.3, "rest", None),
+                           (1.2, "bag_R", None), (2.0, "rest", None)], bag=True)
+    frames = actor.frames()
+    cfg = PharmaGuardConfig()
+    cfg.objects.enabled = False
+    cfg.alert.alert_log_file = str(tmp_path / "alerts.jsonl")
+    p = PharmaGuardPipeline(cfg, detector=ScriptedPoseDetector(frames, cfg))
+    p.object_detector = FixedBagDetector(actor)
+    ticks = iter(range(10_000))
+    real = p.process_frame
+    p.process_frame = lambda f: real(f, timestamp=next(ticks) / FPS)   # scripted time, not wall time
+    srv.bridge.mode, srv.bridge._pipelines["alarm_cam"] = "pharmaguard", p
+
+    client = TestClient(srv.app)
+    blank = _jpeg(np.zeros((480, 640, 3), np.uint8))
+    replies = []
+    with client.websocket_connect("/ws/camera?cam=alarm_cam") as ws:
+        ws.receive_json()
+        for _ in range(len(frames) + int(3 * FPS)):
+            ws.send_bytes(blank)
+            replies.append(ws.receive_json())
+        assert {r["sound_seq"] for r in replies if r["sounding"]} == {1}   # sounded, exactly one incident
+        assert replies[-1]["alarm"] == "ACTIVE"
+        assert client.post("/api/cameras/alarm_cam/ack", json={"operator": "phone alarm_cam"}).json()["ok"]
+        ws.send_bytes(blank)
+        after = ws.receive_json()
+    assert after["alarm"] == "ACKNOWLEDGED" and after["sounding"] is False
+    assert p.alarm.snapshot().acknowledged_by == "phone alarm_cam"
 
 
 def test_dashboard_has_phone_cameras_tab():
@@ -146,3 +199,184 @@ def test_dashboard_has_phone_cameras_tab():
     html = phone_cameras_html("http://192.168.1.5:8000/")
     assert 'data-server="http://192.168.1.5:8000"' in html
     assert "data-server" not in phone_cameras_html(None)
+
+
+# --------------------------------------------------------------------------- per-camera zone editor
+def test_zone_validation_rules(monkeypatch):
+    monkeypatch.syspath_prepend(SERVER_DIR)
+    sys.modules.pop("pg_bridge", None)
+    import pg_bridge
+    box = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.6], [0.1, 0.6]]
+    ok, err = pg_bridge.validate_zones([{"name": "Shelf A", "polygon_normalized": box}])
+    assert err == "" and ok[0]["name"] == "Shelf A" and ok[0]["polygon_normalized"] == box
+    clamped, err = pg_bridge.validate_zones([{"name": "x", "polygon_normalized": [[-1, 0], [2, 0], [2, 3]]}])
+    assert err == "" and clamped[0]["polygon_normalized"] == [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]
+    assert pg_bridge.validate_zones([])[1] == ""                        # no zones is allowed
+    bad = [
+        ("not a list", "must be a list"),
+        ([{"name": "", "polygon_normalized": box}], "needs a name"),
+        ([{"name": "a", "polygon_normalized": box[:2]}], "3 to"),
+        ([{"name": "a", "polygon_normalized": [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]]}], "too small"),
+        ([{"name": "a", "polygon_normalized": box}, {"name": "a", "polygon_normalized": box}], "two zones"),
+        ([{"name": "a", "polygon_normalized": [[0, "x"], [1, 0], [1, 1]]}], "invalid corner"),
+        ([{"name": f"z{i}", "polygon_normalized": box} for i in range(9)], "at most"),
+    ]
+    for raw, msg in bad:
+        assert msg in pg_bridge.validate_zones(raw)[1], raw
+
+
+def test_zone_editor_endpoints_save_per_camera(monkeypatch, tmp_path):
+    srv = _load_server(monkeypatch, "none")
+    monkeypatch.setattr(sys.modules["pg_bridge"], "ZONES_DIR", tmp_path)
+    client = TestClient(srv.app)
+
+    assert client.get("/api/cameras/cam1/snapshot.jpg").status_code == 404      # nothing streamed yet
+    with client.websocket_connect("/ws/camera?cam=cam1") as ws:
+        ws.receive_json()
+        ws.send_bytes(_jpeg(np.full((120, 160, 3), 50, np.uint8)))
+        ws.receive_json()
+    snap = client.get("/api/cameras/cam1/snapshot.jpg")
+    assert snap.status_code == 200 and snap.headers["content-type"] == "image/jpeg"
+    page = client.get("/zones/cam1")
+    assert page.status_code == 200 and "/api/cameras/" in page.text and ">cam1<" in page.text
+
+    assert client.get("/api/cameras/cam1/zones").json()["source"] == "default"
+    box = [[0.2, 0.2], [0.8, 0.2], [0.8, 0.7], [0.2, 0.7]]
+    r = client.put("/api/cameras/cam1/zones", json={"zones": [{"name": "Front", "polygon_normalized": box}]})
+    assert r.status_code == 200 and r.json()["source"] == "camera"
+    assert (tmp_path / "cam1.json").exists()
+    got = client.get("/api/cameras/cam1/zones").json()
+    assert got["zones"][0]["name"] == "Front" and got["zones"][0]["polygon_normalized"] == box
+    assert client.get("/api/cameras/cam2/zones").json()["source"] == "default"   # other cameras unaffected
+
+    r = client.put("/api/cameras/cam1/zones", json={"zones": [{"name": "x", "polygon_normalized": box[:2]}]})
+    assert r.status_code == 400 and "corners" in r.json()["error"]
+    assert client.put("/api/cameras/cam1/zones", content=b"{oops").status_code == 400
+    assert client.get("/api/cameras/cam1/zones").json()["zones"][0]["name"] == "Front"   # bad input changed nothing
+
+    r = client.delete("/api/cameras/cam1/zones")
+    assert r.status_code == 200 and r.json()["source"] == "default" and not (tmp_path / "cam1.json").exists()
+    # path tricks are sanitized into a plain camera name inside the zones folder
+    client.put("/api/cameras/..%2F..%2Fevil/zones", json={"zones": []})
+    assert all(p.parent == tmp_path for p in tmp_path.rglob("*.json"))
+
+
+def _result(boxes, confs, names):
+    from pharmaguard.detector import DetectionResult
+    return DetectionResult(xyxy=np.array(boxes, np.float32), confidence=np.array(confs, np.float32),
+                           class_id=np.arange(len(boxes), dtype=np.int32), class_name=list(names))
+
+
+def test_object_scan_postprocess_labels_and_filters():
+    from pharmaguard.config import ItemDetectorConfig
+    from pharmaguard.object_scan import postprocess
+    cfg = ItemDetectorConfig()
+    res = _result(
+        [[10, 10, 50, 90], [100, 100, 120, 140], [0, 0, 200, 190], [60, 60, 90, 100], [130, 20, 190, 80],
+         [5, 100, 40, 150]],
+        [0.80, 0.30, 0.90, 0.95, 0.55, 0.50],
+        ["smartphone", "tinsel", "martial arts gym", "person", "bookshelf", "office chair"])
+    got = {o.raw_name: o for o in postprocess(res, 200, 200, cfg)}
+    assert got["smartphone"].label == "mobile phone"               # synonym merged
+    assert got["tinsel"].label == "object"                         # unsure -> plain 'object', raw name kept
+    assert "martial arts gym" not in got                           # scene-sized box dropped
+    assert "person" not in got                                     # people are the pose model's job
+    assert got["bookshelf"].label == "shelf" and got["office chair"].label == "chair"
+    assert got["smartphone"].box == [0.05, 0.05, 0.25, 0.45]       # normalized
+    assert list(got) == ["smartphone", "bookshelf", "office chair", "tinsel"]   # most confident first
+
+
+def test_object_display_modes_hide_clutter_by_default():
+    from pharmaguard.config import ItemDetectorConfig
+    from pharmaguard.object_scan import postprocess, visible
+    cfg = ItemDetectorConfig()
+    assert cfg.show == "key"                                         # uncluttered by default
+    res = _result([[0, 0, 20, 20], [30, 30, 60, 60], [70, 70, 90, 95], [100, 100, 130, 140]],
+                  [0.86, 0.30, 0.60, 0.70], ["tablet computer", "tinsel", "lampshade", "bookshelf"])
+    objs = postprocess(res, 200, 200, cfg)
+    by = {o.raw_name: o for o in objs}
+    assert by["tablet computer"].label == "phone/tablet" and by["tablet computer"].key
+    assert by["bookshelf"].key and not by["tinsel"].key and not by["lampshade"].key
+    assert [o.raw_name for o in objs][:2] == ["tablet computer", "bookshelf"]     # key objects sorted first
+    assert {o.label for o in visible(objs, "key")} == {"phone/tablet", "shelf"}
+    assert len(visible(objs, "all")) == 4 and visible(objs, "off") == []
+    # key objects survive the max_items cap even when many confident non-key boxes exist
+    many = _result([[i, i, i + 15, i + 15] for i in range(0, 100, 2)] + [[150, 150, 190, 190]],
+                   [0.9] * 50 + [0.5], ["lampshade"] * 50 + ["chair"])
+    capped = postprocess(many, 200, 200, ItemDetectorConfig(max_items=5))
+    assert len(capped) == 5 and capped[0].label == "chair"
+
+
+def test_object_scan_runs_in_background_and_is_display_only(monkeypatch):
+    """The scan never blocks frames, its boxes reach overlay + phone, and the behaviour engine never sees them."""
+    import threading
+    import time as _time
+    from pharmaguard.config import PharmaGuardConfig
+    from pharmaguard.pipeline import PharmaGuardPipeline
+
+    gate = threading.Event()
+
+    class SlowStub:
+        calls = 0
+
+        def detect(self, frame):
+            SlowStub.calls += 1
+            gate.wait(5)                                  # simulate a slow model until released
+            h, w = frame.shape[:2]
+            return _result([[0.1 * w, 0.1 * h, 0.3 * w, 0.5 * h]], [0.71], ["bottle"])
+
+        def get_model_info(self):
+            return {"model_name": "stub"}
+
+    cfg = PharmaGuardConfig()
+    cfg.recording.enabled = False
+    assert cfg.items.enabled is False                     # off by default for the main dashboard
+    p = PharmaGuardPipeline(config=cfg)
+    p.enable_object_scan(SlowStub())
+    seen_bags = []
+    real_analyze = p.behavior_analyzer.analyze
+    monkeypatch.setattr(p.behavior_analyzer, "analyze",
+                        lambda *a, **k: (seen_bags.append(k.get("bag_boxes")), real_analyze(*a, **k))[1])
+    frame = np.full((240, 320, 3), 90, np.uint8)
+    t0 = _time.perf_counter()
+    for _ in range(3):
+        out = p.process_frame(frame)                      # model is blocked: frames must still flow
+    assert _time.perf_counter() - t0 < 4.0 and out.metadata["overlay"]["items"] == []
+    gate.set()
+    deadline = _time.time() + 5
+    while not p.object_scanner.latest() and _time.time() < deadline:
+        _time.sleep(0.02)
+    out = p.process_frame(frame)
+    item = out.metadata["overlay"]["items"][0]
+    assert item["label"] == "bottle" and item["conf"] == pytest.approx(0.71, abs=1e-3)
+    assert item["box"] == [0.1, 0.1, 0.3, 0.5]
+    assert item["key"] is True and out.metadata["overlay"]["items_show"] == "key"
+    assert all(not b for b in seen_bags)                  # behaviour never received an item box
+    assert out.metadata["stage_timings"]["object_scan_ms"] > 0
+
+    monkeypatch.syspath_prepend(SERVER_DIR)
+    sys.modules.pop("pg_bridge", None)
+    import pg_bridge
+    bridge = pg_bridge.PharmaGuardBridge("none")
+    bridge.mode = "pharmaguard"
+    bridge._pipelines["stubcam"] = p
+    items = [d for d in bridge.process("stubcam", frame).detections if d.get("kind") == "item"]
+    assert items and items[0]["label"] == "bottle" and items[0]["alert"] is False and items[0]["name"] == "bottle"
+    p.close()
+    assert p.object_scanner is None
+
+
+@pytest.mark.skipif(not os.path.exists(os.path.join(REPO, "yoloe-11s-seg-pf.pt")), reason="YOLOE weights not present")
+def test_yoloe_detector_finds_named_objects_on_real_image():
+    pytest.importorskip("ultralytics")
+    import ultralytics
+    from pharmaguard.config import ItemDetectorConfig
+    from pharmaguard.detector import YOLOEDetector, make_item_detector
+    from pharmaguard.object_scan import postprocess
+    cfg = ItemDetectorConfig(model_name=os.path.join(REPO, "yoloe-11s-seg-pf.pt"))
+    det = make_item_detector(cfg, device="cpu")
+    assert isinstance(det, YOLOEDetector) and det.get_model_info()["vocabulary_size"] > 1000
+    img = cv2.imread(os.path.join(os.path.dirname(ultralytics.__file__), "assets", "bus.jpg"))
+    objs = postprocess(det.detect(img), img.shape[1], img.shape[0], cfg)
+    assert objs and all(o.raw_name not in ("person", "man", "woman") for o in objs)
+    assert all(0.0 <= v <= 1.0 for o in objs for v in o.box)

@@ -5,7 +5,8 @@
   const $ = (id) => document.getElementById(id);
   const video = $('v'), ov = $('ov'), ctx = ov.getContext('2d');
   const camInput = $('cam'), btn = $('go'), statusEl = $('status'), flag = $('flag'), errBox = $('err');
-  const SEND_WIDTH = 640, JPEG_QUALITY = 0.7;
+  const JPEG_QUALITY = 0.7;
+  let sendWidth = 640;   // the server raises this when its object scan runs at a higher resolution
   const params = new URLSearchParams(location.search);
   const clean = (s) => (s || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 32);
   const store = {
@@ -13,19 +14,73 @@
     set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
   };
   camInput.value = clean(params.get('cam')) || clean(store.get('pg-cam')) || 'phone1';
+  // Zone editor for this camera (draws on the last frame the server received from it).
+  const zonesLink = $('zones');
+  const syncZonesLink = () => { zonesLink.href = '/zones/' + encodeURIComponent(clean(camInput.value) || 'phone1'); };
+  syncZonesLink();
+  camInput.addEventListener('input', syncZonesLink);
 
   let stream = null, ws = null, running = false, inFlight = 0, maxInFlight = 2;
+  // Object boxes: 'key' = people + key objects only (default, uncluttered), 'all' = every box, 'off' = people only.
+  const OBJ_MODES = ['key', 'all', 'off'], OBJ_TEXT = { key: 'Objects: Key', all: 'Objects: All', off: 'Objects: Off' };
+  const objBtn = $('objs');
+  let objMode = OBJ_MODES.includes(store.get('pg-objects')) ? store.get('pg-objects') : null;
+  const setObjMode = (m) => { objMode = m; objBtn.textContent = OBJ_TEXT[m]; };
+  setObjMode(objMode || 'key');
+  objBtn.onclick = () => { const m = OBJ_MODES[(OBJ_MODES.indexOf(objMode) + 1) % 3]; setObjMode(m); store.set('pg-objects', m); };
+  const shown = (d) => d.kind !== 'item' || (objMode === 'all') || (objMode === 'key' && d.key);
   let dets = [], fpsTimes = [], lastMs = 0, detector = '', wakeLock = null, retry = 0;
   const grab = document.createElement('canvas');
 
   const setStatus = (html) => { statusEl.innerHTML = html; };
   const showError = (html) => { errBox.innerHTML = html; errBox.style.display = html ? 'block' : 'none'; };
 
+  // Alarm: siren while the server says this camera's alarm is sounding (once per incident, auto-silences
+  // server-side); Acknowledge / Reset post to the same routes the dashboard uses. Same tone as the dashboard.
+  const alarmBtn = $('alarm');
+  let actx = null, osc = null, flip = null, lastSeq = 0, alarmState = 'IDLE';
+  const audioUnlock = () => {   // iOS: audio only starts inside a tap, so call this from the Start tap
+    if (!actx) { const AC = window.AudioContext || window.webkitAudioContext; if (AC) actx = new AC(); }
+    if (actx && actx.state === 'suspended') actx.resume();
+  };
+  const sirenStop = () => {
+    if (flip) clearInterval(flip); flip = null;
+    try { if (osc) osc.stop(); } catch { /* already stopped */ } osc = null;
+    try { if (navigator.vibrate) navigator.vibrate(0); } catch { /* unsupported */ }
+  };
+  const sirenStart = () => {
+    if (!actx || osc) return;
+    const gain = actx.createGain(); gain.gain.value = 0.25; gain.connect(actx.destination);
+    osc = actx.createOscillator(); osc.type = 'square'; osc.frequency.value = 960; osc.connect(gain); osc.start();
+    let hi = true;
+    flip = setInterval(() => {
+      hi = !hi; if (osc) osc.frequency.setValueAtTime(hi ? 960 : 640, actx.currentTime);
+      try { if (navigator.vibrate) navigator.vibrate(300); } catch { /* iOS has no vibrate */ }
+    }, 400);
+  };
+  const onAlarm = (state, sounding, seq) => {
+    alarmState = state;
+    if (sounding && seq !== lastSeq) { sirenStop(); sirenStart(); }
+    if (!sounding) sirenStop();
+    lastSeq = sounding ? seq : 0;
+    alarmBtn.style.display = state === 'ACTIVE' || state === 'ACKNOWLEDGED' ? 'inline-block' : 'none';
+    alarmBtn.textContent = state === 'ACTIVE' ? 'Acknowledge' : 'Reset alarm';
+  };
+  alarmBtn.onclick = async () => {
+    sirenStop();
+    const cam = encodeURIComponent(clean(camInput.value) || 'phone1');
+    try {
+      await fetch('/api/cameras/' + cam + '/' + (alarmState === 'ACTIVE' ? 'ack' : 'reset'), { method: 'POST',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operator: 'phone ' + cam }) });
+    } catch { /* next reply shows the real state */ }
+  };
+
   async function requestWakeLock() {
     try { if (navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); } catch { wakeLock = null; }
   }
 
   async function start() {
+    audioUnlock();
     showError('');
     const cam = clean(camInput.value) || 'phone1';
     camInput.value = cam; store.set('pg-cam', cam);
@@ -37,7 +92,8 @@
     }
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: false,
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 640 }, height: { ideal: 480 } } });
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 960 } } });
+      // Captured larger than sent: each frame is shrunk to the server's send_width before upload.
     } catch (e) {
       showError('Could not open the camera (' + e.name + '). Allow camera access for this site.');
       return;
@@ -55,7 +111,7 @@
     if (ws) { ws.onclose = null; ws.close(); ws = null; }
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     try { if (wakeLock) wakeLock.release(); } catch { /* already released */ }
-    wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none';
+    wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none'; onAlarm('IDLE', false, 0);
     btn.textContent = 'Start'; btn.classList.remove('stop'); camInput.disabled = false;
     ctx.clearRect(0, 0, ov.width, ov.height); setStatus('Stopped');
   }
@@ -70,7 +126,9 @@
     ws.onmessage = (ev) => {
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.type === 'hello') { detector = m.detector; maxInFlight = m.max_in_flight || 2; pump(); return; }
+      if (m.type === 'hello') { detector = m.detector; maxInFlight = m.max_in_flight || 2; sendWidth = m.send_width || 640;
+        if (!store.get('pg-objects') && OBJ_MODES.includes(m.objects_show)) setObjMode(m.objects_show);
+        pump(); return; }
       if (m.type === 'detections' || m.type === 'skipped') {
         inFlight = Math.max(0, inFlight - 1);
         if (m.type === 'detections') {
@@ -78,7 +136,9 @@
           const now = performance.now();
           fpsTimes.push(now);
           while (fpsTimes.length && now - fpsTimes[0] > 3000) fpsTimes.shift();
-          flag.style.display = dets.some((d) => d.alert) ? 'block' : 'none';
+          onAlarm(m.alarm || 'IDLE', !!m.sounding, m.sound_seq || 0);
+          flag.textContent = m.alarm === 'ACTIVE' ? 'ALARM · for staff review' : 'For staff review';
+          flag.style.display = m.alarm === 'ACTIVE' || dets.some((d) => d.alert) ? 'block' : 'none';
         }
         pump();
       }
@@ -102,7 +162,7 @@
     if (!ws || ws.readyState !== 1 || !video.videoWidth) { setTimeout(pump, 100); return; }
     while (inFlight < maxInFlight) {
       inFlight++;
-      const scale = Math.min(1, SEND_WIDTH / video.videoWidth);
+      const scale = Math.min(1, sendWidth / video.videoWidth);
       grab.width = Math.round(video.videoWidth * scale);
       grab.height = Math.round(video.videoHeight * scale);
       grab.getContext('2d').drawImage(video, 0, 0, grab.width, grab.height);
@@ -126,9 +186,9 @@
       // Boxes are normalized [0,1]; map them onto the letterboxed (object-fit: contain) video.
       const s = Math.min(W / vw, H / vh), dw = vw * s, dh = vh * s, ox = (W - dw) / 2, oy = (H - dh) / 2;
       ctx.lineWidth = 3; ctx.font = '600 14px system-ui, sans-serif';
-      for (const d of dets) {
+      for (const d of dets.filter(shown)) {
         const x = ox + d.x1 * dw, y = oy + d.y1 * dh, w = (d.x2 - d.x1) * dw, h = (d.y2 - d.y1) * dh;
-        const color = d.alert ? '#ef4444' : (d.label === 'bag' ? '#a78bfa' : '#22c55e');
+        const color = d.alert ? '#ef4444' : d.label === 'bag' ? '#a78bfa' : d.kind === 'item' ? '#38bdf8' : '#22c55e';
         ctx.strokeStyle = color; ctx.strokeRect(x, y, w, h);
         const text = d.label + (d.alert ? ' · ' + (d.level || 'REVIEW') : '') + ' ' + Math.round((d.conf || 0) * 100) + '%';
         const tw = ctx.measureText(text).width + 10;

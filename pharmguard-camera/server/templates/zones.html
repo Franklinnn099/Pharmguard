@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Shelf zones · PharmGuard</title>
+<style>
+  :root{color-scheme:dark;--bg:#0b0f17;--panel:#111827;--line:#334155;--text:#e2e8f0;--muted:#94a3b8;--accent:#0ea5e9;--zone:#22d3ee;--draft:#facc15;--bad:#ef4444;--ok:#22c55e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;justify-content:space-between;align-items:baseline;gap:8px 16px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid #1e293b}
+  h1{font-size:18px;margin:0} header nav{display:flex;gap:14px;font-size:14px}
+  a{color:#38bdf8}
+  main{max-width:980px;margin:0 auto;padding:12px 16px 32px}
+  .help{color:var(--muted);font-size:14px;line-height:1.5;margin:0 0 10px}
+  .stagewrap{text-align:center;background:#000;border-radius:8px;overflow:hidden}
+  .stage{position:relative;display:inline-block;max-width:100%;vertical-align:top}
+  .stage img{display:block;max-width:100%;max-height:62vh;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none}
+  .stage canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:manipulation;cursor:crosshair}
+  .nosnap{padding:60px 16px;color:var(--muted)}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+  input[type=text]{flex:1;min-width:10em;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px 10px;font-size:16px}
+  button{background:#1e293b;color:var(--text);border:1px solid var(--line);border-radius:6px;padding:9px 14px;font-size:15px;font-weight:600;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#04111c}
+  button:disabled{opacity:.45;cursor:default}
+  label.live{display:flex;gap:6px;align-items:center;font-size:14px;color:var(--muted)}
+  ul{list-style:none;padding:0;margin:12px 0 0}
+  li{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;background:var(--panel);border:1px solid var(--line);border-radius:6px;margin-bottom:6px;font-size:14px}
+  li .sw{display:inline-block;width:10px;height:10px;border-radius:2px;background:var(--zone);margin-right:8px}
+  li button{padding:4px 10px;font-size:13px}
+  #status{min-height:1.4em;margin-top:10px;font-size:14px}
+  #status.err{color:var(--bad)} #status.ok{color:var(--ok)}
+  .dirty{color:var(--draft);font-size:13px}
+</style></head>
+<body>
+<header>
+  <h1>Shelf zones · <span id="camname">{{CAM}}</span></h1>
+  <nav><a href="/monitor">Monitor</a><a id="backcam" href="/?cam={{CAM}}&start=1">Back to camera</a></nav>
+</header>
+<main>
+  <p class="help">Hold the camera where it will stay. Then <b>tap the corners of the shelf front</b>, where hands reach in,
+    and tap <b>Add zone</b>. When you're done, tap <b>Save &amp; apply</b>. It takes effect on the camera's next frame.</p>
+
+  <div class="stagewrap">
+    <div class="stage" id="stage" hidden><img id="snap" alt="Latest frame from the camera"><canvas id="cv"></canvas></div>
+    <div class="nosnap" id="nosnap">Waiting for a frame from <b>{{CAM}}</b>… start streaming from the phone first.</div>
+  </div>
+
+  <div class="row">
+    <input type="text" id="zname" maxlength="40" placeholder="Zone name, e.g. Shelf_A" aria-label="Zone name">
+    <button id="undo" disabled>Undo corner</button>
+    <button id="clear" disabled>Clear</button>
+    <button id="add" class="primary" disabled>Add zone</button>
+  </div>
+
+  <ul id="list"></ul>
+
+  <div class="row">
+    <button id="save" class="primary">Save &amp; apply</button>
+    <button id="reset">Use default zone</button>
+    <label class="live"><input type="checkbox" id="live" checked> Live picture</label>
+    <span class="dirty" id="dirty" hidden>Unsaved changes</span>
+  </div>
+  <div id="status" role="status"></div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const CAM = document.getElementById('camname').textContent.trim();
+  const API = '/api/cameras/' + encodeURIComponent(CAM);
+  const $ = (id) => document.getElementById(id);
+  const img = $('snap'), cv = $('cv'), ctx = cv.getContext('2d'), stage = $('stage'), nosnap = $('nosnap');
+  const nameIn = $('zname'), list = $('list'), statusEl = $('status'), dirtyEl = $('dirty');
+  let zones = [], draft = [], dirty = false, source = 'default';
+
+  const status = (msg, kind) => { statusEl.textContent = msg; statusEl.className = kind || ''; };
+  const setDirty = (d) => { dirty = d; dirtyEl.hidden = !d; };
+  const esc = (s) => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function nextName() {
+    let i = zones.length + 1;
+    while (zones.some(z => z.name === 'Shelf_' + i)) i++;
+    return 'Shelf_' + i;
+  }
+
+  function renderList() {
+    list.innerHTML = zones.length ? '' : '<li>No zones: nothing on this camera will count as a shelf.</li>';
+    zones.forEach((z, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = '<span><span class="sw"></span><b>' + esc(z.name) + '</b> · ' + z.polygon_normalized.length + ' corners</span>';
+      const del = document.createElement('button');
+      del.textContent = 'Delete';
+      del.onclick = () => { zones.splice(i, 1); setDirty(true); renderList(); draw(); };
+      li.appendChild(del);
+      list.appendChild(li);
+    });
+    if (!nameIn.value || zones.some(z => z.name === nameIn.value)) nameIn.value = nextName();
+  }
+
+  function buttons() {
+    $('undo').disabled = $('clear').disabled = draft.length === 0;
+    $('add').disabled = draft.length < 3;
+  }
+
+  function draw() {
+    const W = cv.clientWidth, H = cv.clientHeight, dpr = window.devicePixelRatio || 1;
+    if (!W || !H) return;
+    if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+    const poly = (pts, stroke, fill, close) => {
+      ctx.beginPath();
+      pts.forEach((p, k) => (k ? ctx.lineTo(p[0] * W, p[1] * H) : ctx.moveTo(p[0] * W, p[1] * H)));
+      if (close) ctx.closePath();
+      if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+      ctx.strokeStyle = stroke; ctx.lineWidth = 3; ctx.stroke();
+    };
+    ctx.font = '600 14px system-ui, sans-serif';
+    for (const z of zones) {
+      poly(z.polygon_normalized, '#22d3ee', 'rgba(34,211,238,.15)', true);
+      const p = z.polygon_normalized[0];
+      ctx.fillStyle = '#22d3ee'; ctx.fillText(z.name, p[0] * W + 6, p[1] * H + 18);
+    }
+    if (draft.length) {
+      poly(draft, '#facc15', draft.length > 2 ? 'rgba(250,204,21,.18)' : null, draft.length > 2);
+      draft.forEach((p, k) => {
+        ctx.beginPath(); ctx.arc(p[0] * W, p[1] * H, 9, 0, Math.PI * 2); ctx.fillStyle = '#facc15'; ctx.fill();
+        ctx.fillStyle = '#111'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(String(k + 1), p[0] * W, p[1] * H);
+        ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+      });
+    }
+  }
+
+  cv.addEventListener('pointerdown', (e) => {
+    const r = cv.getBoundingClientRect();
+    const x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    draft.push([+x.toFixed(4), +y.toFixed(4)]);
+    buttons(); draw();
+  });
+  $('undo').onclick = () => { draft.pop(); buttons(); draw(); };
+  $('clear').onclick = () => { draft = []; buttons(); draw(); };
+  $('add').onclick = () => {
+    const name = nameIn.value.trim().replace(/[^A-Za-z0-9 _-]/g, '').slice(0, 40);
+    if (!name) { status('Give the zone a name.', 'err'); return; }
+    if (zones.some(z => z.name === name)) { status('A zone called "' + name + '" already exists.', 'err'); return; }
+    zones.push({ name, polygon_normalized: draft });
+    draft = []; nameIn.value = ''; setDirty(true); buttons(); renderList(); draw();
+    status('Added "' + name + '". Tap Save & apply to use it.');
+  };
+
+  async function call(method, body) {
+    const r = await fetch(API + '/zones', { method, cache: 'no-store',
+      headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  }
+  function load(j) {
+    zones = (j.zones || []).map(z => ({ name: z.name, polygon_normalized: z.polygon_normalized,
+      ...(z.prolonged_presence_sec != null ? { prolonged_presence_sec: z.prolonged_presence_sec } : {}) }));
+    source = j.source; setDirty(false); renderList(); draw();
+  }
+
+  $('save').onclick = async () => {
+    if (draft.length >= 3 && !confirmDraft()) return;
+    try {
+      load(await call('PUT', { zones }));
+      status('Saved. ' + zones.length + ' zone(s) now active on ' + CAM + '.', 'ok');
+    } catch (e) { status('Not saved: ' + e.message, 'err'); }
+  };
+  $('reset').onclick = async () => {
+    try { load(await call('DELETE')); status('Back to the default zone from the config file.', 'ok'); }
+    catch (e) { status('Reset failed: ' + e.message, 'err'); }
+  };
+  function confirmDraft() {   // corners tapped but "Add zone" forgotten: add it rather than lose it
+    $('add').onclick(); return draft.length === 0;
+  }
+
+  // Snapshot: reload about once a second while "Live picture" is on, without flicker.
+  let loading = false;
+  function refresh() {
+    if (loading) return;
+    loading = true;
+    const next = new Image();
+    next.onload = () => {
+      loading = false;
+      img.src = next.src; stage.hidden = false; nosnap.hidden = true;
+      requestAnimationFrame(draw);
+    };
+    next.onerror = () => { loading = false; if (stage.hidden) nosnap.hidden = false; };
+    next.src = API + '/snapshot.jpg?t=' + Date.now();
+  }
+  setInterval(() => { if ($('live').checked || stage.hidden) refresh(); }, 1000);
+  window.addEventListener('resize', draw);
+  window.addEventListener('beforeunload', (e) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+  refresh();
+  call('GET').then(load).catch(e => status('Could not load zones: ' + e.message, 'err'));
+  buttons();
+})();
+</script>
+</body></html>

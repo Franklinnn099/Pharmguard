@@ -41,7 +41,8 @@ async function poll(){
       t.querySelector('.meta').innerHTML =
         `<span class="${c.connected?'on':''}"><span class="dot"></span><strong>${esc(c.camera_id)}</strong> ${c.connected?'live':'offline'}</span>`+
         `<span>${c.fps} fps · ${c.persons} person(s)${c.flagged?` · <span class="badge REVIEW">${c.flagged} for staff review</span>`:''}`+
-        `${st!=='IDLE'?` · <span class="badge ${esc(st)}">${esc(st)}</span>`:''}</span>`;
+        `${st!=='IDLE'?` · <span class="badge ${esc(st)}">${esc(st)}</span>`:''}`+
+        ` · <a href="/zones/${encodeURIComponent(c.camera_id)}">Zones</a></span>`;
     }
   }catch(e){ info.textContent = 'server unreachable'; }
 }

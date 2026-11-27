@@ -46,31 +46,63 @@ cd pharmguard-camera\server
 .\.venv\Scripts\python main.py
 ```
 
-The terminal prints the laptop's LAN IP, the phone URL, the exact Chrome-flag value and a QR code.
+The terminal prints the laptop's LAN IP, the phone URL (https when certificates exist), the phone setup steps and a QR code.
 Optional dashboard alongside it (from the repo root, in a second terminal): `python main.py --local`
 → http://127.0.0.1:7860 → **Phone cameras** tab.
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `PG_PORT` | `8000` | Server port |
+| `PG_PORT` | `8000` | HTTP port (laptop pages, Android with the Chrome flag) |
+| `PG_HTTPS_PORT` | `8443` | HTTPS port, active when `certs/cert.pem` + `certs/key.pem` exist (or `PG_SSL_CERT` / `PG_SSL_KEY`) |
 | `PG_DETECTOR` | `pharmaguard` | `pharmaguard` = full pipeline; `none` = no inference (frames shown, detections `[]`). Falls back to `none` with an error log if torch/ultralytics are missing |
 | `PG_CONFIG` | — | PharmaGuard YAML (zones, thresholds), e.g. `..\..\configs\demo_shelf.yaml`. Applies to every phone |
 | `PG_CAM` | `phone1` | Camera name encoded in the terminal QR |
+| `PG_ITEMS` | `1` | "Every object" scan (YOLOE prompt-free, `yoloe-11s-seg-pf.pt`, downloaded on first run): shelves, chairs, phones, bottles…; unsure detections labelled `object`. **Display only** — never affects alerts. `0` = off |
+| `PG_ITEMS_SHOW` | `key` | Default object view: `key` = only shelf, chair, mobile phone, laptop, bottle, box, bag, cup, medicine; `all` = every box incl. `object`; `off`. The phone's **Objects** button switches it per phone |
+| `PG_ITEMS_INTERVAL` | `1.0` | Seconds between object scans (it shares the CPU with person tracking). `0` = as fast as possible |
+| `PG_ITEMS_IMGSZ` | `640` | Scan resolution; `960`/`1280` finds smaller objects (slower; the phone then sends larger frames) |
+| `PG_ITEMS_MODEL` | `yoloe-11s-seg-pf.pt` | Another model, e.g. `yoloe-11m-seg-pf.pt` (more accurate, slower) or `yolov8n.pt` (80 COCO classes, fast) |
 | `PG_NO_RECORDING` | — | `1` = don't write events/clips to `data/` |
 | `PG_CORS_ORIGINS` | `http://127.0.0.1:7860,http://localhost:7860` | Dashboard origins allowed to read `/api/cameras` and post ack/reset |
 
 ## On the phone (one-time)
 
-Browsers only allow the camera on HTTPS or localhost. For a plain-HTTP LAN address, tell Chrome to trust it:
+Phone browsers only allow the camera on **HTTPS** (or localhost).
 
-1. Open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`.
-2. Enable it and enter the address the server prints, e.g. `http://192.168.1.20:8000` (scheme + IP + port, no path).
-3. Tap **Relaunch**.
-4. Phone and laptop on the same Wi-Fi. Scan the QR (or open `/pair?cam=NAME` on the laptop for another name),
-   allow camera access. `?start=1` starts streaming at once.
+### iPhone (any browser: on iOS they all use Safari's engine, and there is no Chrome flag)
 
-If the laptop's IP changes (different Wi-Fi), update the flag. Windows may ask to allow Python through the
-firewall the first time: allow it on **Private** networks, or the phone cannot connect.
+The server serves HTTPS on port **8443** when `server/certs/cert.pem` and `key.pem` exist. Create them once on the
+laptop with [mkcert](https://github.com/FiloSottile/mkcert) (Windows: `winget install FiloSottile.mkcert`):
+
+```powershell
+cd pharmguard-camera\server
+mkdir certs
+mkcert -cert-file certs\cert.pem -key-file certs\key.pem <LAN_IP> localhost 127.0.0.1
+copy "$(mkcert -CAROOT)\rootCA.pem" certs\ca.crt      # PUBLIC CA cert only - never copy rootCA-key.pem
+```
+
+Restart the server, then on the iPhone:
+
+1. In **Safari** open `http://LAN_IP:8000/ca.crt` → **Allow** (downloads a configuration profile).
+2. **Settings → Profile Downloaded → Install** (enter the passcode).
+3. **Settings → General → About → Certificate Trust Settings** → turn on full trust for **mkcert development CA**.
+4. Scan the QR the server prints (it points at `https://LAN_IP:8443/?cam=phone1&start=1`) and allow camera access.
+
+`certs/` is git-ignored: `key.pem` is a private key. The certificate is only valid for the IPs it was made for;
+if the laptop's IP changes, re-run the `mkcert -cert-file ...` line with the new IP (the iPhone profile stays valid).
+To remove the trust later: Settings → General → VPN & Device Management → mkcert profile → Remove.
+
+### Android (Chrome)
+
+Either install the same `ca.crt` (Settings → Security → Install a certificate → CA certificate) and use the https
+link, or skip HTTPS: open `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, enable it, enter
+`http://LAN_IP:8000` (scheme + IP + port), tap **Relaunch**, and open `http://LAN_IP:8000/?cam=NAME&start=1`.
+
+### Both
+
+Phone and laptop on the same Wi-Fi. Windows may ask to allow Python through the firewall the first time: allow it
+on **Private** networks, or the phone cannot connect. `?start=1` starts streaming at once; open `/pair?cam=NAME`
+on the laptop for a QR with another camera name.
 
 ## Pairing format
 
@@ -93,7 +125,7 @@ The server always processes the newest frame, so a slow laptop drops frames inst
 
 Each detection: `{x1, y1, x2, y2, label, conf, alert}` plus `level` (`NORMAL`/`REVIEW`/`ALERT`),
 `track_id`, `score`, `occluded` for people. Coordinates are **normalized to [0, 1]** of the frame.
-`label` is `person #ID` or `bag`. `alert` is `true` when the behaviour engine has raised that person to
+`label` is `person #ID`, `bag`, or for scanned objects (`kind: "item"`) a name such as `shelf`, `chair`, `mobile phone`, or `object` when the model is unsure (`name` holds its raw guess). Object boxes refresh about once a second. `alert` is `true` when the behaviour engine has raised that person to
 REVIEW or ALERT — **for staff review**, not a finding of theft. The alarm (siren) follows ALERT only.
 
 ## HTTP endpoints
@@ -101,8 +133,11 @@ REVIEW or ALERT — **for staff review**, not a finding of theft. The alarm (sir
 | Route | |
 |---|---|
 | `GET /` | The PWA |
+| `GET /ca.crt` | The local CA's public certificate, for installing on an iPhone |
 | `GET /pair?cam=NAME`, `GET /pair/qr.svg?cam=NAME` | Pairing page / QR image |
 | `GET /monitor` | All cameras, live |
+| `GET /zones/{camera_id}` | Zone editor: tap the shelf corners on the live picture; saved per camera in `server/zones/` |
+| `GET/PUT/DELETE /api/cameras/{id}/zones`, `GET /api/cameras/{id}/snapshot.jpg` | Zone API and the un-annotated frame it draws on |
 | `GET /view/{camera_id}` | Annotated MJPEG (zones, tracks, HUD) — usable as `<img src>` |
 | `GET /api/cameras` | Status per camera: connected, fps, frames, skipped, persons, flagged, alarm |
 | `POST /api/cameras/{id}/ack`, `/reset` | Acknowledge / reset that camera's alarm (`{"operator": "..."}`) |
@@ -120,8 +155,8 @@ REVIEW or ALERT — **for staff review**, not a finding of theft. The alarm (sir
 
 - **No login on this server.** Anyone on the same Wi-Fi can open `/monitor` and `/view/...` (people's faces)
   and acknowledge alarms. Use a private network. The Gradio dashboard's login does not cover port 8000.
-- One zone config (`PG_CONFIG`) for all phones; zones are normalized, so a phone must frame the shelf the
-  way the config expects. Per-phone zones are not implemented.
+- Zones: each phone gets its own via `/zones/{camera_id}`; until one is saved it uses `PG_CONFIG`'s zones.
+- Object names come from a general-purpose vocabulary; below 45% confidence they are shown as `object`. Specific products (your medicine packs) are not recognised by name.
 - All phones share one model on one device: total throughput is split between them.
-- Plain HTTP on the LAN; the Chrome flag is the workaround. On Colab/`gradio.live` (HTTPS) the dashboard
+- iPhones need the HTTPS port and a trusted local CA (above); Android can use plain HTTP with the Chrome flag. On Colab/`gradio.live` (HTTPS) the dashboard
   tab cannot load an `http://` camera server (mixed content).

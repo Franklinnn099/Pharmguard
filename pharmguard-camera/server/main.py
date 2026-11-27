@@ -19,7 +19,8 @@ Routes
 WebSocket protocol (/ws/camera)
     server -> {"type": "hello", "camera_id", "detector", "max_in_flight"}       once, on connect
     client -> binary message = one JPEG frame (frames are numbered 1, 2, 3... in send order)
-    server -> {"type": "detections", "frame": n, "detections": [...], "w", "h", "ms", "alarm"}
+    server -> {"type": "detections", "frame": n, "detections": [...], "w", "h", "ms", "alarm",
+                                                          "sounding", "sound_seq"}   siren while sounding
               {"type": "skipped", "frame": n}     a newer frame arrived before this one was processed
     Exactly one reply per frame, in frame order, so the client can count frames in flight.
     client -> {"type": "ping"}  (text)   server -> {"type": "pong", "t": ...}
@@ -58,6 +59,14 @@ logger = logging.getLogger("pharmguard-camera")
 HERE = Path(__file__).resolve().parent
 PWA_DIR = HERE.parent / "pwa"
 PORT = int(os.environ.get("PG_PORT", "8000"))
+# HTTPS (needed by iPhones: iOS only allows the camera on https). Enabled when a certificate exists:
+# certs/cert.pem + certs/key.pem (see README, "iPhone"), or PG_SSL_CERT / PG_SSL_KEY.
+CERT_DIR = HERE / "certs"
+SSL_CERT = os.environ.get("PG_SSL_CERT") or str(CERT_DIR / "cert.pem")
+SSL_KEY = os.environ.get("PG_SSL_KEY") or str(CERT_DIR / "key.pem")
+TLS = os.path.exists(SSL_CERT) and os.path.exists(SSL_KEY)
+HTTPS_PORT = int(os.environ.get("PG_HTTPS_PORT", "8443"))
+CA_CERT = CERT_DIR / "ca.crt"     # PUBLIC root certificate only; the CA's private key never leaves the laptop
 MAX_FRAME_BYTES = 4 * 1024 * 1024
 MAX_IN_FLIGHT = 2
 VIEW_JPEG_QUALITY = 75
@@ -86,8 +95,27 @@ def base_url() -> str:
     return f"http://{lan_ip()}:{PORT}"
 
 
+def phone_base_url() -> str:
+    """What phones open: https when a certificate is configured (works on iPhone and Android), else http."""
+    return f"https://{lan_ip()}:{HTTPS_PORT}" if TLS else base_url()
+
+
 def pair_url(cam: str) -> str:
-    return f"{base_url()}/?cam={cam}&start=1"
+    return f"{phone_base_url()}/?cam={cam}&start=1"
+
+
+def phone_setup_html() -> str:
+    """One-time phone setup steps for the /pair page."""
+    if TLS:
+        return (f"<li><b>iPhone, one-time:</b> in Safari open <code>{base_url()}/ca.crt</code> and tap Allow. "
+                "Then Settings &rarr; <i>Profile Downloaded</i> &rarr; Install. Then Settings &rarr; General &rarr; About "
+                "&rarr; Certificate Trust Settings &rarr; turn on full trust for <i>mkcert</i>.</li>"
+                "<li><b>Android:</b> either install the same <code>ca.crt</code> (Settings &rarr; Security &rarr; "
+                "Install a certificate &rarr; CA certificate), or skip HTTPS: enable Chrome's flag "
+                f"<code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code> for <code>{base_url()}</code> "
+                f"and open <code>{base_url()}/?cam=NAME&amp;start=1</code>.</li>")
+    return ("<li>One-time (Android Chrome): open <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, "
+            f"enable it, enter <code>{base_url()}</code>, then Relaunch. iPhones need HTTPS: see the README.</li>")
 
 
 # --------------------------------------------------------------------------- per-camera state
@@ -139,8 +167,10 @@ def process_frame(camera_id: str, frame: np.ndarray) -> Dict[str, Any]:
         ok, buf = cv2.imencode(".jpg", cv2.cvtColor(res.annotated_rgb, cv2.COLOR_RGB2BGR),
                                [cv2.IMWRITE_JPEG_QUALITY, VIEW_JPEG_QUALITY])
         jpeg = buf.tobytes() if ok else None
+    snap = bridge.alarm_snapshot(camera_id) or {}
     return {"detections": res.detections, "jpeg": jpeg, "w": res.width, "h": res.height,
-            "ms": round(res.processing_ms, 1), "alarm": res.alarm}
+            "ms": round(res.processing_ms, 1), "alarm": res.alarm,
+            "sounding": bool(snap.get("sounding")), "sound_seq": int(snap.get("sound_seq", 0))}
 
 
 def _placeholder_jpeg(text: str) -> bytes:
@@ -160,7 +190,7 @@ app = FastAPI(title="PharmGuard camera server", lifespan=lifespan)
 # The PharmaGuard dashboard (Gradio, port 7860) reads /api/cameras and posts ack/reset from the browser.
 _origins = [o.strip() for o in os.environ.get(
     "PG_CORS_ORIGINS", "http://127.0.0.1:7860,http://localhost:7860").split(",") if o.strip()]
-app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST"],
+app.add_middleware(CORSMiddleware, allow_origins=_origins, allow_methods=["GET", "POST", "PUT", "DELETE"],
                    allow_headers=["Content-Type"])
 
 
@@ -251,12 +281,14 @@ async def ws_camera(ws: WebSocket) -> None:
             s.persons, s.flagged = len(persons), sum(1 for d in persons if d["alert"])
             if not closed.is_set():
                 await send({"type": "detections", "frame": seq, "detections": out["detections"],
-                            "w": out["w"], "h": out["h"], "ms": out["ms"], "alarm": out["alarm"]})
+                            "w": out["w"], "h": out["h"], "ms": out["ms"], "alarm": out["alarm"],
+                            "sounding": out.get("sounding", False), "sound_seq": out.get("sound_seq", 0)})
 
     tasks: List[asyncio.Task] = []
     try:
         await send({"type": "hello", "camera_id": cam, "detector": bridge.mode, "model": bridge.model_name,
-                    "max_in_flight": MAX_IN_FLIGHT})
+                    "objects": bridge.items_model, "max_in_flight": MAX_IN_FLIGHT, "send_width": bridge.send_width,
+                    "objects_show": bridge.items_show})
         tasks = [asyncio.create_task(receiver()), asyncio.create_task(processor())]
         await asyncio.gather(*tasks)
     except (WebSocketDisconnect, RuntimeError):
@@ -332,6 +364,57 @@ async def api_reset(camera_id: str, request: Request) -> JSONResponse:
     return JSONResponse({"ok": ok})
 
 
+@app.get("/api/cameras/{camera_id}/zones")
+async def api_get_zones(camera_id: str) -> JSONResponse:
+    return JSONResponse(await run_in_threadpool(bridge.get_zones, sanitize_cam(camera_id)),
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.put("/api/cameras/{camera_id}/zones")
+async def api_put_zones(camera_id: str, request: Request) -> JSONResponse:
+    """Body {"zones": [{"name", "polygon_normalized": [[x, y], ...]}]}; applied on the camera's next frame."""
+    from pg_bridge import validate_zones
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "body must be JSON"}, status_code=400)
+    zones, err = validate_zones(body.get("zones") if isinstance(body, dict) else None)
+    if err:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    cam = sanitize_cam(camera_id)
+    await run_in_threadpool(bridge.set_zones, cam, zones)
+    return JSONResponse({"ok": True, **(await run_in_threadpool(bridge.get_zones, cam))})
+
+
+@app.delete("/api/cameras/{camera_id}/zones")
+async def api_reset_zones(camera_id: str) -> JSONResponse:
+    cam = sanitize_cam(camera_id)
+    await run_in_threadpool(bridge.reset_zones, cam)
+    return JSONResponse({"ok": True, **(await run_in_threadpool(bridge.get_zones, cam))})
+
+
+@app.get("/api/cameras/{camera_id}/snapshot.jpg")
+async def api_snapshot(camera_id: str) -> Response:
+    """Latest frame WITHOUT annotations, for drawing zones on."""
+    cam = sanitize_cam(camera_id)
+    rgb = bridge.raw_frame(cam)
+    if rgb is not None:
+        ok, buf = await run_in_threadpool(cv2.imencode, ".jpg", cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR))
+        data = buf.tobytes() if ok else None
+    else:
+        st = cameras.get(cam)
+        data = st.jpeg if (st is not None and bridge.mode != "pharmaguard") else None   # "none" mode: raw frame
+    if data is None:
+        return Response("No frame from this camera yet - start streaming first.", status_code=404)
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/zones/{camera_id}", response_class=HTMLResponse)
+async def zones_page(camera_id: str) -> HTMLResponse:
+    cam = sanitize_cam(camera_id)
+    return HTMLResponse((HERE / "templates" / "zones.html").read_text(encoding="utf-8").replace("{{CAM}}", cam))
+
+
 @app.get("/pair/qr.svg")
 async def pair_qr(cam: str = "phone1") -> Response:
     import qrcode
@@ -347,7 +430,16 @@ async def pair(cam: str = "phone1") -> HTMLResponse:
     cam = sanitize_cam(cam)
     return HTMLResponse((HERE / "templates" / "pair.html").read_text(encoding="utf-8")
                         .replace("{{CAM}}", cam).replace("{{URL}}", pair_url(cam))
-                        .replace("{{ORIGIN}}", base_url()))
+                        .replace("{{SETUP}}", phone_setup_html()))
+
+
+@app.get("/ca.crt")
+async def ca_cert() -> Response:
+    """The local CA's PUBLIC certificate, for installing on an iPhone (Safari turns it into a profile)."""
+    if not CA_CERT.exists():
+        return Response("No CA certificate configured (see README, iPhone).", status_code=404)
+    return Response(CA_CERT.read_bytes(), media_type="application/x-x509-ca-cert",
+                    headers={"Content-Disposition": 'attachment; filename="pharmguard-ca.crt"'})
 
 
 @app.get("/monitor", response_class=HTMLResponse)
@@ -364,11 +456,17 @@ def print_banner(cam: str = "phone1") -> None:
     print("\n" + "=" * 64)
     print(" PharmGuard camera server")
     print(f"   Detector:   {bridge.mode}  ({bridge.model_name})")
+    print(f"   Objects:    {bridge.items_model}  (display only; PG_ITEMS=0 off, PG_ITEMS_IMGSZ=960 smaller objects)")
     print(f"   LAN IP:     {lan_ip()}")
     print(f"   Phone URL:  {url}")
     print(f"   Pair page:  {base_url()}/pair     Monitor: {base_url()}/monitor")
-    print(f"   Chrome flag (on the phone, chrome://flags/#unsafely-treat-insecure-origin-as-secure):")
-    print(f"               {base_url()}")
+    if TLS:
+        print(f"   HTTPS:      {phone_base_url()}  (phones; iPhone needs this)")
+        print(f"   iPhone, one-time: Safari -> {base_url()}/ca.crt -> Allow, then Settings -> Profile Downloaded")
+        print("               -> Install, then General -> About -> Certificate Trust Settings -> enable mkcert")
+    else:
+        print(f"   Android Chrome flag (chrome://flags/#unsafely-treat-insecure-origin-as-secure): {base_url()}")
+        print("   iPhone: needs HTTPS - create certs/cert.pem + key.pem (README, 'iPhone') and restart")
     print("=" * 64)
     try:
         import qrcode
@@ -389,4 +487,13 @@ if __name__ == "__main__":
             stream.reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     print_banner(os.environ.get("PG_CAM", "phone1"))
-    uvicorn.run(app, host=os.environ.get("PG_HOST", "0.0.0.0"), port=PORT, log_level="info")
+    host = os.environ.get("PG_HOST", "0.0.0.0")
+    servers = [uvicorn.Server(uvicorn.Config(app, host=host, port=PORT, log_level="info"))]
+    if TLS:   # same app on a second port with TLS; lifespan (pipeline shutdown) runs once, on the HTTP server
+        servers.append(uvicorn.Server(uvicorn.Config(app, host=host, port=HTTPS_PORT, log_level="info",
+                                                     ssl_certfile=SSL_CERT, ssl_keyfile=SSL_KEY, lifespan="off")))
+
+    async def serve_all() -> None:
+        await asyncio.gather(*(srv.serve() for srv in servers))
+
+    asyncio.run(serve_all())

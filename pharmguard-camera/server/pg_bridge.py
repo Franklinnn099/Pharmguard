@@ -13,6 +13,7 @@ Detector modes (env ``PG_DETECTOR``):
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -59,6 +60,67 @@ class CameraStats:
     connected_at: float = field(default_factory=time.time)
 
 
+ZONES_DIR = Path(__file__).resolve().parent / "zones"   # one JSON file per camera: zones/<camera_id>.json
+MAX_ZONES = 8
+MAX_POINTS = 24
+MIN_AREA = 0.002            # fraction of the image; same floor as the dashboard's zone editor
+
+
+def validate_zones(raw: Any) -> "tuple[List[Dict[str, Any]], str]":
+    """Check zones sent by the editor. Returns (clean zone dicts, error message or "")."""
+    if not isinstance(raw, list):
+        return [], "zones must be a list"
+    if len(raw) > MAX_ZONES:
+        return [], f"at most {MAX_ZONES} zones"
+    out: List[Dict[str, Any]] = []
+    for i, z in enumerate(raw):
+        if not isinstance(z, dict):
+            return [], f"zone {i + 1} is not an object"
+        name = "".join(c for c in str(z.get("name", "")).strip() if c.isalnum() or c in " _-")[:40].strip()
+        if not name:
+            return [], f"zone {i + 1} needs a name"
+        if any(o["name"] == name for o in out):
+            return [], f"two zones are named '{name}'"
+        pts = z.get("polygon_normalized")
+        if not isinstance(pts, list) or not 3 <= len(pts) <= MAX_POINTS:
+            return [], f"zone '{name}' needs 3 to {MAX_POINTS} corners"
+        try:
+            poly = [[round(min(1.0, max(0.0, float(p[0]))), 4), round(min(1.0, max(0.0, float(p[1]))), 4)]
+                    for p in pts]
+        except (TypeError, ValueError, IndexError):
+            return [], f"zone '{name}' has an invalid corner"
+        area = 0.5 * abs(sum(poly[k][0] * poly[k - 1][1] - poly[k - 1][0] * poly[k][1] for k in range(len(poly))))
+        if area < MIN_AREA:
+            return [], f"zone '{name}' is too small or its corners are in a line"
+        entry: Dict[str, Any] = {"name": name, "polygon_normalized": poly}
+        if "prolonged_presence_sec" in z:
+            try:
+                entry["prolonged_presence_sec"] = max(1.0, float(z["prolonged_presence_sec"]))
+            except (TypeError, ValueError):
+                pass
+        out.append(entry)
+    return out, ""
+
+
+def _zones_file(camera_id: str) -> Path:
+    return ZONES_DIR / f"{camera_id}.json"   # camera_id is already sanitized to [A-Za-z0-9_-]
+
+
+def load_saved_zones(camera_id: str) -> Optional[List[Dict[str, Any]]]:
+    f = _zones_file(camera_id)
+    if not f.exists():
+        return None
+    try:
+        zones, err = validate_zones(json.loads(f.read_text(encoding="utf-8")).get("zones"))
+    except (OSError, ValueError, AttributeError) as exc:
+        logger.warning("Ignoring unreadable zone file %s: %s", f, exc)
+        return None
+    if err:
+        logger.warning("Ignoring invalid zone file %s: %s", f, err)
+        return None
+    return zones
+
+
 def _resolve_model(name: str) -> str:
     """Prefer weights already in the repo root, so the server never re-downloads them into server/."""
     p = Path(name)
@@ -77,6 +139,10 @@ class PharmaGuardBridge:
         self._config_path = config_path
         self._shared_detector = None
         self._shared_objects = None
+        self._shared_items = None
+        self.items_model = "off"
+        self.items_show = "off"
+        self.send_width = 640
         self.model_name = "none"
         if mode == "pharmaguard":
             self._load_models()
@@ -91,8 +157,23 @@ class PharmaGuardBridge:
         cfg.detector.model_name = _resolve_model(cfg.detector.model_name)
         cfg.objects.model_name = _resolve_model(cfg.objects.model_name)
         cfg.recording.camera_id = camera_id      # every stored event says which phone saw it
+        saved = load_saved_zones(camera_id)      # zones drawn for this camera override the config file's
+        if saved is not None:
+            from pharmaguard.config import ShelfZone
+            cfg.zones = [ShelfZone(**z) for z in saved]
         if os.environ.get("PG_NO_RECORDING") == "1":
             cfg.recording.enabled = False
+        # "Every object" scan (YOLOE prompt-free), display only. On by default for phone cameras; PG_ITEMS=0 = off.
+        cfg.items.enabled = os.environ.get("PG_ITEMS", "1") != "0"
+        if os.environ.get("PG_ITEMS_IMGSZ"):
+            cfg.items.imgsz = int(os.environ["PG_ITEMS_IMGSZ"])     # e.g. 960 for smaller objects (slower)
+        if os.environ.get("PG_ITEMS_INTERVAL"):
+            cfg.items.min_interval_sec = float(os.environ["PG_ITEMS_INTERVAL"])  # seconds between scans; 0 = flat out
+        if os.environ.get("PG_ITEMS_SHOW"):
+            cfg.items.show = os.environ["PG_ITEMS_SHOW"]            # key | all | off (for /view and the default)
+        if os.environ.get("PG_ITEMS_MODEL"):
+            cfg.items.model_name = os.environ["PG_ITEMS_MODEL"]
+        cfg.items.model_name = _resolve_model(cfg.items.model_name)
         return cfg
 
     def _load_models(self) -> None:
@@ -107,6 +188,15 @@ class PharmaGuardBridge:
                 model_name=oc.model_name, confidence_threshold=oc.confidence_threshold,
                 target_classes=oc.target_classes, device=cfg.detector.device,
                 imgsz=cfg.detector.imgsz, half_precision=cfg.detector.half_precision)))
+        if cfg.items.enabled:
+            from pharmaguard.detector import make_item_detector
+            logger.info("Loading object scan model %s (imgsz %d) ...", cfg.items.model_name, cfg.items.imgsz)
+            self._shared_items = _LockedDetector(make_item_detector(
+                cfg.items, device=cfg.detector.device, half_precision=cfg.detector.half_precision))
+            self.items_model = f"{Path(cfg.items.model_name).name} @{cfg.items.imgsz}"
+            # The phone uploads frames at least as wide as the scan resolution, or small objects lose their pixels.
+            self.send_width = max(640, cfg.items.imgsz)
+            self.items_show = cfg.items.show
         info = self._shared_detector.get_model_info()
         self.model_name = f"{Path(str(info.get('model_name'))).name} on {info.get('device')}"
         if not info.get("has_keypoints"):
@@ -122,8 +212,11 @@ class PharmaGuardBridge:
             if p is None:
                 from pharmaguard.pipeline import PharmaGuardPipeline
                 cfg = self._make_config(camera_id)
-                cfg.objects.enabled = False          # don't load a second bag model; shared one injected below
+                cfg.objects.enabled = False          # don't load extra models per camera; shared ones injected below
+                items_on, cfg.items.enabled = cfg.items.enabled, False
                 p = PharmaGuardPipeline(config=cfg, detector=self._shared_detector)
+                if items_on and self._shared_items is not None:
+                    p.enable_object_scan(self._shared_items)
                 if self._shared_objects is not None:
                     p.config.objects.enabled = True
                     p.object_detector = self._shared_objects
@@ -158,9 +251,16 @@ class PharmaGuardBridge:
                 "score": float(entry.get("score", 0.0)),
                 "occluded": bool(entry.get("occluded", False)),
             })
-        for b in overlay.get("bags", []):
-            dets.append({"x1": b[0], "y1": b[1], "x2": b[2], "y2": b[3], "label": "bag", "conf": 1.0,
+        bag_conf = overlay.get("bag_conf", [])
+        for i, b in enumerate(overlay.get("bags", [])):
+            dets.append({"x1": b[0], "y1": b[1], "x2": b[2], "y2": b[3], "label": "bag",
+                         "conf": float(bag_conf[i]) if i < len(bag_conf) else 0.0,   # real detector score
                          "alert": False, "level": "NORMAL"})
+        for it in overlay.get("items", []):          # display only: never flagged, never used for alerts
+            b = it["box"]
+            dets.append({"x1": b[0], "y1": b[1], "x2": b[2], "y2": b[3], "label": str(it["label"]),
+                         "name": str(it.get("name", it["label"])), "conf": float(it["conf"]),
+                         "alert": False, "level": "NORMAL", "kind": "item", "key": bool(it.get("key", False))})
         return FrameResult(dets, out.annotated_frame_rgb, w, h, (time.perf_counter() - t0) * 1000.0,
                            alarm=str(overlay.get("alarm", "IDLE")))
 
@@ -173,6 +273,54 @@ class PharmaGuardBridge:
                 "acknowledged_by": s.acknowledged_by,
                 "active": [{"title": a.title, "message": a.message, "track_id": a.tracker_id,
                             "time": a.timestamp_iso} for a in s.active_alerts]}
+
+    # ------------------------------------------------------------------ zones (per camera)
+    def get_zones(self, camera_id: str) -> Dict[str, Any]:
+        """Zones in effect for a camera: its saved zones, else the config file's (shared default)."""
+        p = self._pipelines.get(camera_id)
+        if p is not None:
+            zones = [z.model_dump() for z in p.config.zones]
+        else:
+            saved = load_saved_zones(camera_id)
+            zones = saved if saved is not None else self._default_zones()
+        return {"camera_id": camera_id, "zones": zones,
+                "source": "camera" if _zones_file(camera_id).exists() else "default"}
+
+    def _default_zones(self) -> List[Dict[str, Any]]:
+        try:
+            from pharmaguard.config import PharmaGuardConfig
+            cfg = PharmaGuardConfig.load_from_yaml(self._config_path) if self._config_path else PharmaGuardConfig()
+            return [z.model_dump() for z in cfg.zones]
+        except ImportError:      # "none" mode without pydantic/pharmaguard deps
+            return []
+
+    def set_zones(self, camera_id: str, zones: List[Dict[str, Any]]) -> None:
+        """Save a camera's zones (validated) and apply them to its running pipeline on the next frame."""
+        ZONES_DIR.mkdir(parents=True, exist_ok=True)
+        f = _zones_file(camera_id)
+        tmp = f.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"camera_id": camera_id, "zones": zones}, indent=2), encoding="utf-8")
+        os.replace(tmp, f)
+        p = self._pipelines.get(camera_id)
+        if p is not None:
+            from pharmaguard.config import ShelfZone
+            p.set_zones([ShelfZone(**z) for z in zones])
+        logger.info("Zones for camera '%s' set to %s", camera_id, [z["name"] for z in zones])
+
+    def reset_zones(self, camera_id: str) -> None:
+        """Forget a camera's own zones and go back to the config file's."""
+        f = _zones_file(camera_id)
+        if f.exists():
+            f.unlink()
+        p = self._pipelines.get(camera_id)
+        if p is not None:
+            from pharmaguard.config import ShelfZone
+            p.set_zones([ShelfZone(**z) for z in self._default_zones()])
+
+    def raw_frame(self, camera_id: str) -> Optional[np.ndarray]:
+        """Last un-annotated RGB frame (what the zone editor draws on), or None."""
+        p = self._pipelines.get(camera_id)
+        return None if p is None else p.last_raw_frame
 
     def acknowledge(self, camera_id: str, operator: str) -> bool:
         p = self._pipelines.get(camera_id)
