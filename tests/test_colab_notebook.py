@@ -103,3 +103,8 @@ def test_launch_cell_defines_mirror_arg_before_use():
     ns = {}
     exec(first, ns)                       # Section 7b not run -> empty, the launch line still formats
     assert ns["MIRROR_ARG"] == ""
+
+
+def test_both_options_say_run_only_one():
+    for marker in ("## 2. Runtime Configuration", "<!-- pg-option2 -->"):
+        assert "Run only ONE option per Colab session" in _cell(marker), marker
