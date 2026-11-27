@@ -60,7 +60,8 @@ class CameraStats:
     connected_at: float = field(default_factory=time.time)
 
 
-ZONES_DIR = Path(__file__).resolve().parent / "zones"   # one JSON file per camera: zones/<camera_id>.json
+# One JSON file per camera: zones/<camera_id>.json. PG_ZONES_DIR moves them (e.g. to Google Drive on Colab).
+ZONES_DIR = Path(os.environ.get("PG_ZONES_DIR") or Path(__file__).resolve().parent / "zones")
 MAX_ZONES = 8
 MAX_POINTS = 24
 MIN_AREA = 0.002            # fraction of the image; same floor as the dashboard's zone editor

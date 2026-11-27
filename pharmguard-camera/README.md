@@ -64,6 +64,8 @@ Optional dashboard alongside it (from the repo root, in a second terminal): `pyt
 | `PG_ITEMS_MODEL` | `yoloe-11s-seg-pf.pt` | Another model, e.g. `yoloe-11m-seg-pf.pt` (more accurate, slower) or `yolov8n.pt` (80 COCO classes, fast) |
 | `PG_NO_RECORDING` | — | `1` = don't write events/clips to `data/` |
 | `PG_CORS_ORIGINS` | `http://127.0.0.1:7860,http://localhost:7860` | Dashboard origins allowed to read `/api/cameras` and post ack/reset |
+| `PG_ACCESS_KEY` | — | Shared secret. Set = every page, `/view`, `/api` and the WebSocket need it (`?key=`, `X-PG-Key` header or the cookie set from `?key=`); the QR/pair link includes it. **Required on any public tunnel** (Colab). Unset = open (LAN only). Also set it for the dashboard process so its Phone cameras tab can connect |
+| `PG_ZONES_DIR` | `server/zones` | Where per-camera zone files are kept (Colab: on Google Drive) |
 
 ## On the phone (one-time)
 
@@ -153,8 +155,10 @@ REVIEW or ALERT — **for staff review**, not a finding of theft. The alarm (sir
 
 ## Limits (read before the demo)
 
-- **No login on this server.** Anyone on the same Wi-Fi can open `/monitor` and `/view/...` (people's faces)
-  and acknowledge alarms. Use a private network. The Gradio dashboard's login does not cover port 8000.
+- **No login unless `PG_ACCESS_KEY` is set.** Without it, anyone on the same Wi-Fi can open `/monitor` and
+  `/view/...` (people's faces) and acknowledge alarms: use a private network. With it, anyone holding the QR/link
+  has full access, so treat the link like a password. The Gradio dashboard's login does not cover this server.
+- Colab (notebook section "Option 2"): frames go through a Cloudflare quick tunnel; the notebook always sets a key.
 - Zones: each phone gets its own via `/zones/{camera_id}`; until one is saved it uses `PG_CONFIG`'s zones.
 - Object names come from a general-purpose vocabulary; below 45% confidence they are shown as `object`. Specific products (your medicine packs) are not recognised by name.
 - All phones share one model on one device: total throughput is split between them.
