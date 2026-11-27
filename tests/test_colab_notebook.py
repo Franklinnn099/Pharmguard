@@ -94,3 +94,12 @@ def test_section8_has_the_iphone_steps():
     md = _cell("## 8. Launch PharmaGuard Security Console")
     for step in ("Safari", "Log in", "Allow", "REAR", "not mirrored", "Auto-Lock → Never", "foreground"):
         assert step in md, step
+
+
+def test_launch_cell_defines_mirror_arg_before_use():
+    src = _cell("!python main.py --colab")
+    first = src.splitlines()[0]
+    assert first.startswith('MIRROR_ARG = globals().get("MIRROR_ARG", "")')
+    ns = {}
+    exec(first, ns)                       # Section 7b not run -> empty, the launch line still formats
+    assert ns["MIRROR_ARG"] == ""
