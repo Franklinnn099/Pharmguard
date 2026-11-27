@@ -381,7 +381,13 @@ FAST_STREAM_HEAD = """
   async function start() {
     if (S.running) return;
     try {
-      S.stream = await navigator.mediaDevices.getUserMedia({video: {width: {ideal: 640}, height: {ideal: 480}}, audio: false});
+      // Rear camera on phones; a laptop has none, so 'exact' fails there and 'ideal' takes the webcam.
+      const cam = (f) => navigator.mediaDevices.getUserMedia(
+        {video: {facingMode: f, width: {ideal: 640}, height: {ideal: 480}}, audio: false});
+      S.stream = await cam({exact: 'environment'}).catch((e) => {
+        if (e.name !== 'OverconstrainedError' && e.name !== 'NotFoundError') throw e;
+        return cam({ideal: 'environment'});
+      });
     } catch (e) { say('Camera blocked: ' + e.message + ' (allow camera access, use the https link)', '#f87171'); return; }
     const video = $('pg-fast-video');
     video.srcObject = S.stream; await video.play().catch(() => {});
