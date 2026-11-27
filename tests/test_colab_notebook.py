@@ -108,3 +108,7 @@ def test_launch_cell_defines_mirror_arg_before_use():
 def test_both_options_say_run_only_one():
     for marker in ("## 2. Runtime Configuration", "<!-- pg-option2 -->"):
         assert "Run only ONE option per Colab session" in _cell(marker), marker
+
+
+def test_o2_10_is_labelled_not_for_the_demo():
+    assert _cell("# O2-10").startswith("# O2-10 (OPTIONAL, NOT FOR THE DEMO")
