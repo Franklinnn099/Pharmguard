@@ -74,6 +74,9 @@ ACCESS_KEY = os.environ.get("PG_ACCESS_KEY", "").strip()
 # Static PWA shell: no camera data, and the manifest is fetched without cookies, so it stays public.
 PUBLIC_PATHS = {"/", "/index.html", "/app.js", "/sw.js", "/manifest.webmanifest", "/icon.svg", "/ca.crt"}
 MAX_FRAME_BYTES = 4 * 1024 * 1024
+# Below this delivered rate a quick reach-and-conceal can fall between frames (seen at 0.5-1.1 frames/s over
+# the Colab tunnel: no alarm). The monitor, dashboard and phone show a warning.
+SLOW_FPS = 5.0
 # Frames a phone may have on the wire. 1 = lowest latency on the laptop CPU (measured: p50 93 ms at 1 vs 179 ms
 # at 2, same throughput). PG_MAX_IN_FLIGHT=2 can help over a slow network.
 MAX_IN_FLIGHT = max(1, int(os.environ.get("PG_MAX_IN_FLIGHT", "1")))
@@ -325,7 +328,7 @@ async def ws_camera(ws: WebSocket) -> None:
     try:
         await send({"type": "hello", "camera_id": cam, "detector": bridge.mode, "model": bridge.model_name,
                     "objects": bridge.items_model, "max_in_flight": MAX_IN_FLIGHT, "send_width": bridge.send_width,
-                    "objects_show": bridge.items_show})
+                    "objects_show": bridge.items_show, "slow_fps": SLOW_FPS})
         tasks = [asyncio.create_task(receiver()), asyncio.create_task(processor())]
         await asyncio.gather(*tasks)
     except (WebSocketDisconnect, RuntimeError):
@@ -369,11 +372,14 @@ async def api_cameras() -> JSONResponse:
     out = []
     for cam, st in sorted(cameras.items()):
         s = st.stats
+        age = round(now - s.last_frame_at, 1) if s.last_frame_at else None
+        # Warn once the camera has had time to warm up, or when frames stopped arriving (fps would look stale).
+        slow = s.connected and s.frames >= 10 and (st.fps < SLOW_FPS or (age is not None and age > 2.0))
         out.append({
             "camera_id": cam, "connected": s.connected, "fps": st.fps if s.connected else 0.0,
             "frames": s.frames, "skipped": s.skipped, "processing_ms": s.processing_ms,
             "resolution": f"{s.width}x{s.height}" if s.width else "",
-            "last_frame_age_sec": round(now - s.last_frame_at, 1) if s.last_frame_at else None,
+            "last_frame_age_sec": age, "slow": slow,
             "persons": s.persons, "flagged": s.flagged, "alarm": bridge.alarm_snapshot(cam) or {"state": s.alarm},
             "view_url": f"/view/{cam}",
         })

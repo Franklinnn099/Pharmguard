@@ -22,8 +22,11 @@
   #status b{color:#e2e8f0}
   #flag{position:fixed;top:0;left:0;right:0;padding:10px 16px;text-align:center;font-weight:700;display:none;background:#dc2626;color:#fff}
   /* Shown while frames are portrait; never blocks taps or streaming. */
-  #rotate{position:fixed;top:48px;left:50%;transform:translateX(-50%);padding:8px 14px;border-radius:8px;display:none;
+  #rotate{position:fixed;top:calc(96px + env(safe-area-inset-top));left:50%;transform:translateX(-50%);padding:8px 14px;border-radius:8px;display:none;
           background:rgba(234,179,8,.92);color:#1c1300;font-weight:700;font-size:15px;pointer-events:none;white-space:nowrap}
+  #fps{position:fixed;top:calc(48px + env(safe-area-inset-top));right:10px;padding:6px 10px;border-radius:8px;display:none;
+       background:rgba(11,15,23,.8);color:#e2e8f0;font:700 16px system-ui,sans-serif;pointer-events:none;text-align:right}
+  #fps.slow{background:rgba(234,179,8,.95);color:#1c1300;max-width:60vw}
   #err{position:fixed;top:30%;left:16px;right:16px;padding:16px;border-radius:8px;background:#1e293b;display:none;line-height:1.5}
   #err code{background:#0b0f17;padding:1px 5px;border-radius:4px;word-break:break-all}
 </style>
@@ -31,6 +34,7 @@
 <div id="stage"><video id="v" playsinline muted autoplay></video><canvas id="ov"></canvas></div>
 <div id="flag">For staff review</div>
 <div id="rotate" role="status">↻ Rotate to landscape for a wider view</div>
+<div id="fps" role="status"></div>
 <div id="err"></div>
 <div id="bar">
   <input id="cam" aria-label="Camera name" maxlength="32" placeholder="camera name">

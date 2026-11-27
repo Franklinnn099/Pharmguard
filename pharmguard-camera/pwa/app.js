@@ -37,7 +37,8 @@
   const shown = (d) => d.kind !== 'item' || (objMode === 'all') || (objMode === 'key' && d.key);
   let dets = [], fpsTimes = [], lastMs = 0, detector = '', wakeLock = null, retry = 0;
   const grab = document.createElement('canvas');
-  const rotateHint = $('rotate');
+  const rotateHint = $('rotate'), fpsBadge = $('fps');
+  let slowFps = 5, replies = 0;   // threshold comes from the server's hello (SLOW_FPS)
 
   const setStatus = (html) => { statusEl.innerHTML = html; };
   const showError = (html) => { errBox.innerHTML = html; errBox.style.display = html ? 'block' : 'none'; };
@@ -143,6 +144,7 @@
     if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
     try { if (wakeLock) wakeLock.release(); } catch { /* already released */ }
     wakeLock = null; dets = []; inFlight = 0; flag.style.display = 'none'; rotateHint.style.display = 'none';
+    fpsBadge.style.display = 'none';
     onAlarm('IDLE', false, 0);
     btn.textContent = 'Start'; btn.classList.remove('stop'); camInput.disabled = false;
     flipBtn.style.display = 'none';
@@ -160,12 +162,13 @@
       let m;
       try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type === 'hello') { detector = m.detector; maxInFlight = m.max_in_flight || 1; sendWidth = m.send_width || 640;
+        slowFps = m.slow_fps || 5; replies = 0;
         if (!store.get('pg-objects') && OBJ_MODES.includes(m.objects_show)) setObjMode(m.objects_show);
         pump(); return; }
       if (m.type === 'detections' || m.type === 'skipped') {
         inFlight = Math.max(0, inFlight - 1);
         if (m.type === 'detections') {
-          dets = m.detections || []; lastMs = m.ms || 0;
+          dets = m.detections || []; lastMs = m.ms || 0; replies++;
           const now = performance.now();
           fpsTimes.push(now);
           while (fpsTimes.length && now - fpsTimes[0] > 3000) fpsTimes.shift();
@@ -237,6 +240,15 @@
     }
     const n = fpsTimes.length;
     const fps = n > 1 ? ((n - 1) * 1000 / (fpsTimes[n - 1] - fpsTimes[0])).toFixed(1) : '0.0';
+    // Recent replies only, so a stall shows up as a falling rate instead of a frozen one.
+    const fresh = n > 1 && performance.now() - fpsTimes[n - 1] < 2000;
+    const live = ws && ws.readyState === 1 ? (fresh ? parseFloat(fps) : 0) : null;
+    fpsBadge.style.display = live === null ? 'none' : 'block';
+    const slow = live !== null && replies >= 10 && live < slowFps;
+    fpsBadge.classList.toggle('slow', slow);
+    fpsBadge.textContent = live === null ? '' : slow
+      ? '⚠ ' + live.toFixed(1) + ' fps: too slow for reliable detection (need ' + slowFps + '+)'
+      : live.toFixed(1) + ' fps';
     if (ws && ws.readyState === 1) {
       setStatus('<b>' + camInput.value + '</b> live · ' + fps + ' fps · ' + lastMs.toFixed(0) + ' ms · ' + detector);
     }

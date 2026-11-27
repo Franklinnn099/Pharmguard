@@ -77,12 +77,14 @@ PHONE_CAMERAS_HEAD = """
       if (!t || !t.isConnected) {
         t = document.createElement('div'); t.className = 'pg-phone-tile';
         t.innerHTML = '<img alt="Camera ' + esc(c.camera_id) + '" src="' + server + '/view/' + encodeURIComponent(c.camera_id) + keyOf(root) + '">' +
-          '<div class="pg-phone-meta"></div>';
+          '<div class="pg-phone-slow" hidden></div><div class="pg-phone-meta"></div>';
         grid.appendChild(t); tiles[c.camera_id] = t;
       }
       const a = c.alarm || {}, st = a.state || 'IDLE';
       if (a.sounding) { sounding = true; key += c.camera_id + ':' + a.sound_seq + ';'; }
       t.classList.toggle('hot', c.flagged > 0 || st === 'ACTIVE');
+      const slow = t.querySelector('.pg-phone-slow'); slow.hidden = !c.slow;
+      slow.textContent = '⚠ ' + c.fps + ' fps: too slow for reliable detection (need 5+). Check Wi-Fi / move closer to the router.';
       const btns = (st === 'ACTIVE' || st === 'ACKNOWLEDGED')
         ? ' <button onclick="pgPhoneAction(\\'' + esc(c.camera_id) + '\\',\\'' + (st === 'ACTIVE' ? 'ack' : 'reset') + '\\')">' +
           (st === 'ACTIVE' ? 'Acknowledge' : 'Reset') + '</button>' : '';
@@ -107,6 +109,7 @@ PHONE_CAMERAS_HEAD = """
 #pg-phones .pg-phone-tile{background:#111827;border:1px solid #334155;border-radius:8px;overflow:hidden}
 #pg-phones .pg-phone-tile.hot{border-color:#ef4444;box-shadow:0 0 0 2px #ef4444}
 #pg-phones img{display:block;width:100%;aspect-ratio:4/3;object-fit:contain;background:#000}
+#pg-phones .pg-phone-slow{background:#eab308;color:#1c1300;font-weight:700;padding:6px 10px;font-size:13px}
 #pg-phones .pg-phone-meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;padding:8px 10px;font-size:13px;color:#e2e8f0}
 #pg-phones .pg-phone-info{font-size:13px;color:#94a3b8}
 #pg-phones .pg-phone-empty{padding:24px 0;color:#94a3b8}

@@ -472,3 +472,32 @@ def test_laptop_demo_defaults_scan_off_one_in_flight(monkeypatch):
     assert srv.bridge._make_config("c").items.enabled is True
     with TestClient(srv.app).websocket_connect("/ws/camera?cam=c") as ws:
         assert ws.receive_json()["max_in_flight"] == 2
+
+
+def test_api_flags_cameras_too_slow_for_reliable_detection(monkeypatch):
+    import time as _t
+    srv = _load_server(monkeypatch, "none")
+    client = TestClient(srv.app)
+    with client.websocket_connect("/ws/camera?cam=c") as ws:
+        assert ws.receive_json()["slow_fps"] == srv.SLOW_FPS == 5.0
+    now = _t.time()
+
+    def cam(name, frames, times, connected=True):
+        st = srv.camera(name)
+        st.stats.connected, st.stats.frames, st.stats.last_frame_at = connected, frames, times[-1]
+        st._fps_times = list(times)
+
+    cam("fast", 100, [now - 1 + i * 0.1 for i in range(10)])          # ~10 fps, fresh
+    cam("slow", 100, [now - 2, now - 1, now - 0.1])                    # ~1 fps
+    cam("warming", 3, [now - 2, now - 1, now - 0.1])                   # too early to judge
+    cam("stalled", 100, [now - 6 + i * 0.1 for i in range(10)])       # 10 fps but nothing for 5 s
+    cam("gone", 100, [now - 2, now - 1], connected=False)             # offline: no fps warning
+    flags = {c["camera_id"]: c["slow"] for c in client.get("/api/cameras").json()["cameras"]}
+    assert flags == {"c": False, "fast": False, "slow": True, "warming": False, "stalled": True, "gone": False}
+
+
+def test_monitor_and_dashboard_render_the_slow_warning():
+    from pharmaguard.ui_phones import PHONE_CAMERAS_HEAD
+    monitor = open(os.path.join(SERVER_DIR, "templates", "monitor.html"), encoding="utf-8").read()
+    for page in (monitor, PHONE_CAMERAS_HEAD):
+        assert "c.slow" in page and "too slow for reliable detection" in page

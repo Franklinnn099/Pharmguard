@@ -14,6 +14,7 @@
   .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:#64748b}
   .on .dot{background:#22c55e} .badge{padding:1px 6px;border-radius:4px;font-weight:600}
   .badge.ALERT,.badge.ACTIVE{background:#ef4444;color:#fff} .badge.REVIEW{background:#f59e0b;color:#111}
+  .slow{background:#eab308;color:#1c1300;font-weight:700;padding:6px 10px;font-size:13px}
   .empty{padding:32px 16px;color:#94a3b8}
   a{color:#38bdf8}
 </style></head>
@@ -33,11 +34,13 @@ async function poll(){
     for(const c of j.cameras){
       let t = tiles[c.camera_id];
       if(!t){ t = document.createElement('div'); t.className='tile';
-        t.innerHTML = `<img alt="Camera ${esc(c.camera_id)}" src="/view/${encodeURIComponent(c.camera_id)}"><div class="meta"></div>`;
+        t.innerHTML = `<img alt="Camera ${esc(c.camera_id)}" src="/view/${encodeURIComponent(c.camera_id)}"><div class="slow" hidden></div><div class="meta"></div>`;
         grid.appendChild(t); tiles[c.camera_id]=t; }
       const st = (c.alarm && c.alarm.state) || 'IDLE';
       const hot = c.flagged>0 || /ACTIVE|ALERT/.test(st);
       t.classList.toggle('alert', hot);
+      const slow = t.querySelector('.slow'); slow.hidden = !c.slow;
+      slow.textContent = `⚠ ${c.fps} fps: too slow for reliable detection (need 5+). Check Wi-Fi / move closer to the router.`;
       t.querySelector('.meta').innerHTML =
         `<span class="${c.connected?'on':''}"><span class="dot"></span><strong>${esc(c.camera_id)}</strong> ${c.connected?'live':'offline'}</span>`+
         `<span>${c.fps} fps · ${c.persons} person(s)${c.flagged?` · <span class="badge REVIEW">${c.flagged} for staff review</span>`:''}`+
