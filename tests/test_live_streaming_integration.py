@@ -217,6 +217,8 @@ def test_ui_transport_configuration():
     assert out["format"] == "jpeg"
     assert cam["streaming"] is True
     assert cam["webcam_options"]["constraints"]["video"]["width"] == {"ideal": 640}
+    assert cam["webcam_options"]["constraints"]["video"]["facingMode"] == "environment"   # rear camera on phones
+    assert cam["webcam_options"]["mirror"] is False   # frames reach detection unmirrored
     api_names = {d.get("api_name") for d in cfg["dependencies"]}
     assert {"stream_frame", "process_frame", "refresh_dashboard"} <= api_names
 

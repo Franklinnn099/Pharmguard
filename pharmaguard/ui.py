@@ -437,6 +437,7 @@ def create_pharmaguard_ui(
                                     webcam_options=gr.WebcamOptions(
                                         mirror=False,
                                         constraints={"video": {
+                                            "facingMode": "environment",   # rear camera on phones; laptops ignore it
                                             "width": {"ideal": stream_cfg.capture_width},
                                             "height": {"ideal": stream_cfg.capture_height},
                                         }},
