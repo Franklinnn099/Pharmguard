@@ -608,3 +608,35 @@ that receives JPEG frames on `WS /ws/camera?cam=NAME` and runs each through `Pha
 **Risks / not done:** the camera server has **no login**: anyone on the Wi-Fi can view feeds (faces) and acknowledge
 alarms. One zone config (`PG_CONFIG`) for all phones. Plain HTTP needs Chrome's insecure-origin flag on each phone.
 Not yet tested with a real phone or in a real browser.
+
+### 21a. iPhone HTTPS, per-camera zone editor, generic item boxes (2026-11-24)
+
+- **iPhone:** iOS allows the camera only on HTTPS and has no insecure-origin flag. The camera server now also serves
+  HTTPS on 8443 when `server/certs/cert.pem` + `key.pem` exist (made with mkcert for the LAN IP); the public CA cert is
+  served at `/ca.crt` for installing as an iOS profile. `certs/` is git-ignored (private key). Verified with a real iPhone:
+  profile installed, PWA streamed over `wss://` (hundreds of frames processed). Vercel was considered and rejected: no
+  WebSockets/persistent state/size for torch, and an https page cannot reach a plain-http LAN server anyway.
+- **Zone editor per phone camera** (`/zones/{camera_id}`): tap corners on the latest raw frame, saved to
+  `server/zones/{camera_id}.json`, applied live via `PharmaGuardPipeline.set_zones`, loaded when that camera's pipeline is
+  created (overrides `PG_CONFIG` zones). Validation: 3-24 corners, area >= 0.2% of the image, unique names, <= 8 zones.
+- **"Every object" scan** (`ItemDetectorConfig`, `items` section; **default off**, on for phone cameras via `PG_ITEMS=1`).
+  Owner asked for shelves, chairs, mobile phones and small objects, and "every object, labelled 'object' if unnamed".
+  COCO has no shelf class, so the backend is **YOLOE prompt-free** (`yoloe-11s-seg-pf.pt`, 4,585 built-in names incl.
+  shelf, chair, smartphone, bottle, box, medicine) via `YOLOEDetector(BaseDetector)`. Measured on the dev laptop CPU
+  (640 px): YOLO-World-s 220-370 ms, YOLOE-11s-pf 350-570 ms per frame (both measured while a phone was also streaming,
+  so somewhat inflated), vs ~170 ms for yolov8n; at 960 px YOLO-World took 530-1000 ms.
+  - Runs in `AsyncObjectScanner` (background thread, newest frame only, full input resolution), never on the per-frame
+    path. Scanning flat out still cut person tracking from ~3.0 to **2.0 frames/s** (shared CPU, measured with no phone
+    connected), so `min_interval_sec` = 1.0 by default: tracking measured **2.6 / 3.0 frames/s**, object boxes refresh ~1/s.
+  - Label rule: name shown when conf >= `name_confidence` (0.45), otherwise `object` (raw name kept as `name`);
+    synonyms merged (smartphone/phone -> mobile phone, bookshelf -> shelf, office chair -> chair); people/body parts
+    dropped (pose model's job); boxes > 60% of the frame dropped (scene labels such as "martial arts gym").
+  - Small objects: `imgsz` (`PG_ITEMS_IMGSZ`, e.g. 960); the phone then uploads frames that wide (`send_width` in hello)
+    and captures at up to 1280x960. Slower; not yet measured end to end.
+  - **Uncluttered by default** (owner: "showing all the detections makes the system not user friendly"): `show` =
+    `key` draws only `key_names` (shelf, chair, mobile phone, phone/tablet, laptop, bottle, box, bag, cup, medicine);
+    the phone has an **Objects: Key / All / Off** button (remembered per phone). Every box is still sent, flagged `key`.
+    On iPhone footage a phone seen from above was labelled "tablet computer" (86%), so tablet computer -> `phone/tablet`.
+  - **Display only**: never given to the behaviour engine or alerts (unit test). Low-confidence names are unreliable
+    (bus.jpg sample: "stop sign", "trench coat" below 0.45 shown as `object`).
+- Bag boxes now carry the detector's real confidence (`overlay.bag_conf`); previously the phone output hard-coded 1.0.
